@@ -1,0 +1,12 @@
+# ARIA Controller - Deploy to Phone
+# Run these 3 commands ONE BY ONE in a NEW terminal window (PowerShell or CMD)
+
+# Step 1 - Login to Firebase (opens browser)
+firebase login
+
+# Step 2 - Deploy the phone controller
+cd "C:\D FOLDER\Projects\AI"
+firebase deploy --only hosting --project aria-3e1da
+
+# That's it! Your phone URL will be shown at the end like:
+# Hosting URL: https://aria-3e1da.web.app

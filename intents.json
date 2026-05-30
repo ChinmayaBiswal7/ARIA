@@ -1,0 +1,66 @@
+{
+  "intents": [
+    {
+      "tag": "CHAT",
+      "patterns": [
+        "hello",
+        "hi",
+        "hey",
+        "how are you",
+        "who are you",
+        "good morning",
+        "good evening",
+        "what is your name"
+      ],
+      "responses": [
+        ""
+      ]
+    },
+    {
+      "tag": "OPEN",
+      "patterns": [
+        "open notepad",
+        "open chrome",
+        "open calculator",
+        "run vlc",
+        "start spotify",
+        "open youtube",
+        "launch camera",
+        "open code",
+        "start Chrome",
+        "open Google"
+      ],
+      "responses": [
+        ""
+      ]
+    },
+    {
+      "tag": "TYPE",
+      "patterns": [
+        "type hello world",
+        "type this for me",
+        "write a email",
+        "type code",
+        "write something",
+        "input text"
+      ],
+      "responses": [
+        ""
+      ]
+    },
+    {
+      "tag": "CLOSE",
+      "patterns": [
+        "close notepad",
+        "close chrome",
+        "exit calculator",
+        "stop spotify",
+        "close youtube",
+        "quit vlc"
+      ],
+      "responses": [
+        ""
+      ]
+    }
+  ]
+}

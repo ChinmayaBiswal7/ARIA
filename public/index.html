@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#05060f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>ARIA Remote</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <style>
+    :root {
+      --bg: #05060f;
+      --panel: rgba(10, 11, 22, 0.8);
+      --panel-border: rgba(0, 229, 255, 0.12);
+      --accent: #00e5ff;
+      --accent-rgb: 0, 229, 255;
+      --purple-rgb: 167, 139, 250;
+      --yellow-rgb: 251, 191, 36;
+      --green: #10b981;
+      --red: #ef4444;
+      --text: #f1f5f9;
+      --muted: #64748b;
+      --glass-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    }
+
+    * { 
+      box-sizing: border-box; 
+      margin: 0; 
+      padding: 0; 
+      -webkit-tap-highlight-color: transparent; 
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      background-image: radial-gradient(circle at 50% 0%, #170d3a 0%, #05060f 70%);
+      color: var(--text);
+      min-height: 100dvh;
+      overflow-x: hidden;
+    }
+
+    /* ── Top Bar ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+    }
+
+    .topbar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-text { 
+      font-size: 1.1rem; 
+      font-weight: 900; 
+      letter-spacing: 3px; 
+      color: var(--text);
+    }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: blink 2s infinite;
+      transition: background-color 0.3s, box-shadow 0.3s;
+    }
+    @keyframes blink {
+      0%,100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+    .status-dot.offline { 
+      background: var(--red); 
+      box-shadow: 0 0 8px var(--red); 
+      animation: none; 
+    }
+    .status-dot.waiting { 
+      background: #fbbf24; 
+      box-shadow: 0 0 8px #fbbf24; 
+      animation: blink 1.5s infinite; 
+    }
+
+    /* ── Hero Panel ── */
+    .hero-panel {
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      padding-top: 60px;
+      padding-bottom: 40px;
+    }
+
+    .sphere-container {
+      width: 340px;
+      height: 340px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: pointer;
+    }
+
+    #sphere-canvas {
+      width: 340px;
+      height: 340px;
+    }
+
+    /* Activation overlay on sphere */
+    .activation-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(5, 6, 15, 0.4);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      border-radius: 50%;
+      z-index: 15;
+      text-align: center;
+      transition: opacity 0.4s ease, visibility 0.4s;
+    }
+    .activation-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .activation-btn {
+      background: rgba(0, 229, 255, 0.1);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 12px 24px;
+      border-radius: 30px;
+      font-size: 0.8rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      cursor: pointer;
+      box-shadow: 0 0 15px rgba(0, 229, 255, 0.25);
+      animation: button-pulse 1.8s infinite ease-in-out;
+    }
+    @keyframes button-pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 15px rgba(0, 229, 255, 0.25); }
+      50% { transform: scale(1.04); box-shadow: 0 0 25px rgba(0, 229, 255, 0.5); }
+    }
+
+    /* State displays */
+    .hero-info {
+      text-align: center;
+      max-width: 85%;
+      margin-top: 10px;
+      z-index: 5;
+    }
+
+    .hero-status {
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 5px;
+      color: var(--accent);
+      margin-bottom: 8px;
+      transition: color 0.3s;
+    }
+
+    .hero-transcript {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      line-height: 1.5;
+      font-style: italic;
+      min-height: 42px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    /* Scroll Indicator */
+    .scroll-indicator {
+      position: absolute;
+      bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      animation: bounce 2s infinite;
+      z-index: 5;
+      text-decoration: none;
+    }
+
+    @keyframes bounce {
+      0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+      40% { transform: translateY(-8px); }
+      60% { transform: translateY(-4px); }
+    }
+
+    .scroll-indicator svg {
+      width: 20px;
+      height: 20px;
+      fill: currentColor;
+    }
+
+    /* ── Controls Container ── */
+    .controls-container {
+      background: #060712;
+      background-image: radial-gradient(ellipse at 50% 0%, #130f2b 0%, #060712 80%);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 32px 18px 48px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .section-label {
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--muted);
+      margin: 28px 8px 12px;
+    }
+    .section-label.first {
+      margin-top: 0;
+    }
+
+    /* Glass Panels */
+    .glass-card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      padding: 16px;
+      box-shadow: var(--glass-glow);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
+
+    /* Command Input */
+    .input-section {
+      display: flex;
+      gap: 10px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: rgba(5, 5, 12, 0.8);
+      border: 1.5px solid rgba(0, 229, 255, 0.2);
+      border-radius: 14px;
+      padding: 14px 16px;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.25s, box-shadow 0.25s;
+    }
+    input[type="text"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
+    }
+    input[type="text"]::placeholder { 
+      color: var(--muted); 
+    }
+
+    .send-btn {
+      background: linear-gradient(135deg, #00e5ff, #0083b0);
+      border: none;
+      color: #030712;
+      padding: 0 20px;
+      border-radius: 14px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 800;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(0, 229, 255, 0.25);
+      transition: transform 0.15s, box-shadow 0.15s;
+      white-space: nowrap;
+    }
+    .send-btn:active { 
+      transform: scale(0.95); 
+      box-shadow: none; 
+    }
+
+    /* Macros Grid */
+    .macros-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .macro-card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 16px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      user-select: none;
+      position: relative;
+      overflow: hidden;
+    }
+    .macro-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 50% 50%, rgba(0, 229, 255, 0.08), transparent 70%);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .macro-card:active::before { 
+      opacity: 1; 
+    }
+    .macro-card:active { 
+      transform: scale(0.97); 
+      border-color: rgba(0, 229, 255, 0.35); 
+    }
+    .macro-card.sent {
+      border-color: var(--green);
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.25);
+    }
+
+    .macro-icon  { 
+      font-size: 1.6rem; 
+      margin-bottom: 6px; 
+      display: block; 
+    }
+    .macro-title { 
+      font-size: 0.85rem; 
+      font-weight: 700; 
+      color: var(--text); 
+    }
+    .macro-desc  { 
+      font-size: 0.7rem; 
+      color: var(--muted); 
+      margin-top: 3px; 
+    }
+
+    /* System Controls Grid */
+    .controls-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+    }
+
+    .ctrl-btn {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      padding: 12px 6px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      user-select: none;
+    }
+    .ctrl-btn:active { 
+      transform: scale(0.95); 
+      border-color: rgba(0, 229, 255, 0.4); 
+    }
+    .ctrl-icon  { 
+      font-size: 1.25rem; 
+      margin-bottom: 4px; 
+      display: block; 
+    }
+    .ctrl-label { 
+      font-size: 0.68rem; 
+      font-weight: 700; 
+      color: #94a3b8; 
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: rgba(0, 229, 255, 0.08);
+      border: 1px solid rgba(0, 229, 255, 0.35);
+      color: var(--accent);
+      padding: 10px 22px;
+      border-radius: 40px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.35s;
+      opacity: 0;
+      z-index: 999;
+      white-space: nowrap;
+      box-shadow: 0 4px 20px rgba(0, 229, 255, 0.15);
+    }
+    .toast.show { 
+      transform: translateX(-50%) translateY(0); 
+      opacity: 1; 
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-logo">
+      <div class="logo-text">ARIA</div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 16px;">
+      <div class="status-dot offline" id="conn-dot"></div>
+    </div>
+  </div>
+
+  <!-- Hero Panel (Glowing Jarvis Sphere Screen) -->
+  <div class="hero-panel">
+    <div class="sphere-container" id="sphere-click-zone" onclick="initializeRemote()">
+      <canvas id="sphere-canvas" width="340" height="340"></canvas>
+      
+      <!-- Activation Overlay -->
+      <div class="activation-overlay" id="activation-overlay">
+        <button class="activation-btn">Activate remote</button>
+      </div>
+    </div>
+
+    <div class="hero-info">
+      <div class="hero-status" id="hub-state">OFFLINE</div>
+      <div class="hero-transcript" id="status-display">Tap the sphere above to connect to ARIA</div>
+    </div>
+
+    <!-- Scroll down indicator -->
+    <a href="#controls" class="scroll-indicator">
+      <span>Controls</span>
+      <svg viewBox="0 0 24 24">
+        <path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z"/>
+      </svg>
+    </a>
+  </div>
+
+  <!-- Controls Container -->
+  <div class="controls-container" id="controls">
+    
+    <!-- Command Input Card -->
+    <div class="section-label first">Command Console</div>
+    <div class="glass-card input-section">
+      <input type="text" id="cmd-input" placeholder="Type a command..." autocomplete="off" autocorrect="off" spellcheck="false">
+      <button class="send-btn" onclick="sendCustomCommand()">Send</button>
+    </div>
+
+    <!-- Quick Macros -->
+    <div class="section-label">Quick Macros</div>
+    <div class="macros-grid">
+      <div class="macro-card" id="m0" onclick="sendMacro(this,'prepare ml workspace')">
+        <span class="macro-icon">💻</span>
+        <div class="macro-title">ML Workspace</div>
+        <div class="macro-desc">VS Code + HuggingFace</div>
+      </div>
+      <div class="macro-card" id="m1" onclick="sendMacro(this,'study mode')">
+        <span class="macro-icon">📖</span>
+        <div class="macro-title">Study Mode</div>
+        <div class="macro-desc">Focus + mute</div>
+      </div>
+      <div class="macro-card" id="m2" onclick="sendMacro(this,'pc status')">
+        <span class="macro-icon">🔋</span>
+        <div class="macro-title">PC Stats</div>
+        <div class="macro-desc">Battery + active app</div>
+      </div>
+      <div class="macro-card" id="m3" onclick="sendMacro(this,'close the tab')">
+        <span class="macro-icon">✖️</span>
+        <div class="macro-title">Close Tab</div>
+        <div class="macro-desc">Browser cleanup</div>
+      </div>
+      <div class="macro-card" id="m4" onclick="sendMacro(this,'take screenshot')">
+        <span class="macro-icon">📸</span>
+        <div class="macro-title">Screenshot</div>
+        <div class="macro-desc">Capture screen</div>
+      </div>
+      <div class="macro-card" id="m5" onclick="sendMacro(this,'scroll down')">
+        <span class="macro-icon">👇</span>
+        <div class="macro-title">Scroll Down</div>
+        <div class="macro-desc">Page scroll</div>
+      </div>
+    </div>
+
+    <!-- System Controls -->
+    <div class="section-label">System Shortcuts</div>
+    <div class="controls-grid">
+      <div class="ctrl-btn" onclick="sendCtrl('minimize')">
+        <span class="ctrl-icon">🗕</span>
+        <div class="ctrl-label">Minimize</div>
+      </div>
+      <div class="ctrl-btn" onclick="sendCtrl('maximize')">
+        <span class="ctrl-icon">🗖</span>
+        <div class="ctrl-label">Maximize</div>
+      </div>
+      <div class="ctrl-btn" onclick="sendCtrl('close window')">
+        <span class="ctrl-icon">🗙</span>
+        <div class="ctrl-label">Close Win</div>
+      </div>
+      <div class="ctrl-btn" onclick="sendCtrl('scroll up')">
+        <span class="ctrl-icon">⬆️</span>
+        <div class="ctrl-label">Scroll Up</div>
+      </div>
+      <div class="ctrl-btn" onclick="sendCtrl('go back')">
+        <span class="ctrl-icon">◀️</span>
+        <div class="ctrl-label">Back</div>
+      </div>
+      <div class="ctrl-btn" onclick="sendCtrl('go forward')">
+        <span class="ctrl-icon">▶️</span>
+        <div class="ctrl-label">Forward</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ── Firebase Init ────────────────────────────────────────────────────────
+    const firebaseConfig = {
+      apiKey:            "AIzaSyA5l74ebBKR8-veakGNISlwkIdasA-vQaQ",
+      authDomain:        "aria-3e1da.firebaseapp.com",
+      projectId:         "aria-3e1da",
+      storageBucket:     "aria-3e1da.firebasestorage.app",
+      messagingSenderId: "968886942490",
+      appId:             "1:968886942490:web:8ab8c8a061ae6d79a94aa3"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // ── 3D Particle Sphere class (Cinematic Jarvis Hologram - Optimized) ─────
+    class SphereCanvas {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.nPoints = 140; // High performance particle count
+        this.connectDist = 0.55;
+        
+        // Generate uniform points on sphere using Fibonacci spiral for neat structures
+        this.basePts = [];
+        for (let i = 0; i < this.nPoints; i++) {
+          let phi = Math.acos(-1 + (2 * i) / this.nPoints);
+          let theta = Math.sqrt(this.nPoints * Math.PI) * phi;
+          let x = Math.sin(phi) * Math.cos(theta);
+          let y = Math.sin(phi) * Math.sin(theta);
+          let z = Math.cos(phi);
+          this.basePts.push({
+            x: x, y: y, z: z,
+            speed: 0.5 + Math.random() * 1.5,
+            phase: Math.random() * 2 * Math.PI
+          });
+        }
+        
+        this.pts = this.basePts.map(p => ({...p}));
+        this.ry = 0.0;
+        this.rx = 0.12; 
+        this.pulse = 1.0;
+        this.pdx = 0.008;
+        this.time = 0.0;
+        this.state = "OFFLINE";
+        this.wave = Array(32).fill(0.04);
+        
+        // Concentric orbits
+        this.orbits = [
+          { radiusFrac: 1.1, speed: 0.8, dash: [5, 15], angle: 0 },
+          { radiusFrac: 1.25, speed: -0.5, dash: [40, 20, 10, 20], angle: 0 },
+          { radiusFrac: 1.4, speed: 1.2, dash: [2, 12], angle: 0 }
+        ];
+        
+        this.audioAnalyser = null;
+        this.audioDataArray = null;
+
+        // Rich palettes
+        this.palettes = {
+          "OFFLINE":   { core: "rgba(100, 110, 120, 0.95)", glow: "rgba(40, 45, 50, 0.4)", line: "rgba(80, 90, 100, 0.15)", glowColor: "#646e78" },
+          "IDLE":      { core: "rgba(0, 140, 255, 0.95)",  glow: "rgba(0, 70, 180, 0.35)",  line: "rgba(0, 100, 220, 0.12)", glowColor: "#008cff" },
+          "LISTENING": { core: "rgba(0, 229, 255, 0.95)",  glow: "rgba(0, 180, 220, 0.45)",  line: "rgba(0, 180, 220, 0.2)",  glowColor: "#00e5ff" },
+          "THINKING":  { core: "rgba(255, 140, 0, 0.95)",   glow: "rgba(220, 90, 0, 0.45)",   line: "rgba(220, 100, 0, 0.2)",  glowColor: "#ff8c00" }, 
+          "SPEAKING":  { core: "rgba(167, 139, 250, 0.95)", glow: "rgba(139, 92, 246, 0.45)", line: "rgba(124, 58, 237, 0.2)",  glowColor: "#a78bfa" },
+          "ERROR":     { core: "rgba(255, 60, 60, 0.95)",   glow: "rgba(180, 20, 20, 0.45)",   line: "rgba(220, 40, 40, 0.2)",  glowColor: "#ff3c3c" }
+        };
+      }
+
+      setState(state) {
+        const canonical = state.toUpperCase();
+        if (this.palettes[canonical]) {
+          this.state = canonical;
+        } else {
+          this.state = "IDLE";
+        }
+      }
+
+      tick() {
+        this.time += 0.033;
+        
+        let speed = 0.005;
+        if (this.state === "OFFLINE") speed = 0.001;
+        else if (this.state === "IDLE") speed = 0.003;
+        else if (this.state === "LISTENING") speed = 0.010;
+        else if (this.state === "THINKING") speed = 0.018;
+        else if (this.state === "SPEAKING") speed = 0.015;
+        else if (this.state === "ERROR") speed = 0.025;
+        
+        this.ry += speed;
+
+        // Get mic volume level
+        let micVolume = 0;
+        if (this.audioAnalyser && this.audioDataArray && (this.state === "LISTENING" || this.state === "SPEAKING")) {
+          this.audioAnalyser.getByteFrequencyData(this.audioDataArray);
+          let sum = 0;
+          let count = 0;
+          for (let i = 0; i < this.audioDataArray.length; i++) {
+            sum += this.audioDataArray[i];
+            if (this.audioDataArray[i] > 0) count++;
+          }
+          micVolume = count > 0 ? (sum / count / 255) : 0;
+        }
+
+        if (this.state === "SPEAKING" && micVolume === 0) {
+          micVolume = 0.12 + Math.abs(Math.sin(this.time * 6)) * 0.22;
+        }
+
+        let pulseSpeed = 0.008;
+        let pulseRange = [0.96, 1.04];
+        if (this.state === "OFFLINE") { pulseSpeed = 0.002; pulseRange = [0.99, 1.01]; }
+        else if (this.state === "IDLE") { pulseSpeed = 0.005; pulseRange = [0.96, 1.04]; }
+        else if (this.state === "LISTENING") { pulseSpeed = 0.012; pulseRange = [0.88, 1.12]; }
+        else if (this.state === "THINKING") { pulseSpeed = 0.020; pulseRange = [0.92, 1.08]; }
+        else if (this.state === "SPEAKING") { pulseSpeed = 0.018; pulseRange = [0.85, 1.15]; }
+
+        this.pulse += pulseSpeed * this.pdx;
+        if (this.pulse > pulseRange[1] || this.pulse < pulseRange[0]) {
+          this.pdx *= -1;
+        }
+
+        this.orbits.forEach(orb => {
+          let orbitSpeed = orb.speed * (1.0 + micVolume * 3.0);
+          orb.angle = (orb.angle + orbitSpeed) % 360;
+        });
+
+        if (this.state === "SPEAKING" || this.state === "LISTENING") {
+          let activeVol = micVolume > 0 ? micVolume : 0.05;
+          this.wave = this.wave.map((w, i) => {
+            return activeVol * (0.6 + Math.random() * 0.4) + Math.abs(Math.sin(this.time * 5 + i * 0.3)) * 0.15;
+          });
+        } else {
+          this.wave = this.wave.map(w => Math.max(0.04, w * 0.88));
+        }
+
+        return micVolume;
+      }
+
+      draw(micVolume) {
+        let w = this.canvas.width;
+        let h = this.canvas.height;
+        this.ctx.clearRect(0, 0, w, h);
+
+        let pal = this.palettes[this.state];
+        let centerX = w / 2;
+        let centerY = h / 2;
+        let R = Math.min(centerX, centerY) * 0.62 * this.pulse;
+
+        // CRITICAL PERFORMANCE: Disable shadowBlur
+        this.ctx.shadowBlur = 0; 
+
+        // 1. Ambient Background glow
+        this.ctx.beginPath();
+        let bgR = R * 1.5;
+        let radGrad = this.ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, bgR);
+        radGrad.addColorStop(0, pal.glow.replace("0.35", "0.2").replace("0.45", "0.2"));
+        radGrad.addColorStop(1, "rgba(5, 6, 15, 0)");
+        this.ctx.fillStyle = radGrad;
+        this.ctx.arc(centerX, centerY, bgR, 0, 2*Math.PI);
+        this.ctx.fill();
+
+        // 2. Concentric Dashboard Orbit Arcs
+        if (this.state !== "OFFLINE") {
+          this.orbits.forEach(orb => {
+            let rOrb = R * orb.radiusFrac;
+            
+            this.ctx.beginPath();
+            this.ctx.arc(centerX, centerY, rOrb, 0, 2 * Math.PI);
+            this.ctx.strokeStyle = pal.line;
+            this.ctx.lineWidth = 1;
+            this.ctx.setLineDash(orb.dash);
+            this.ctx.stroke();
+            
+            this.ctx.save();
+            this.ctx.translate(centerX, centerY);
+            this.ctx.rotate(orb.angle * Math.PI / 180);
+            
+            for (let a = 0; a < 360; a += 120) {
+              this.ctx.beginPath();
+              this.ctx.arc(0, 0, rOrb, (a - 6) * Math.PI / 180, (a + 6) * Math.PI / 180);
+              this.ctx.strokeStyle = pal.core;
+              this.ctx.lineWidth = 2.5;
+              this.ctx.setLineDash([]);
+              this.ctx.stroke();
+            }
+            this.ctx.restore();
+          });
+          this.ctx.setLineDash([]); 
+        }
+
+        // 3. Project 3D Nodes
+        let projected = this.basePts.map(bp => {
+          let cy = Math.cos(this.ry), sy = Math.sin(this.ry);
+          let rx1 = bp.x * cy + bp.z * sy;
+          let ry1 = bp.y;
+          let rz1 = -bp.x * sy + bp.z * cy;
+
+          let cx = Math.cos(this.rx), sx = Math.sin(this.rx);
+          let rx2 = rx1;
+          let ry2 = ry1 * cx - rz1 * sx;
+          let rz2 = ry1 * sx + rz1 * cx;
+
+          let displacement = 1.0;
+          if (this.state === "LISTENING" || this.state === "SPEAKING") {
+            let rippleOffset = Math.sin(this.time * 20 * bp.speed + bp.phase);
+            displacement = 1.0 + (rippleOffset * micVolume * 0.10) + (micVolume * 0.12);
+          } else {
+            displacement = 1.0 + Math.sin(this.time * 2 * bp.speed + bp.phase) * 0.02;
+          }
+
+          let sizeFactor = 1.0 + micVolume * 1.2;
+
+          return {
+            x: centerX + rx2 * R * displacement,
+            y: centerY - ry2 * R * displacement,
+            z: rz2,
+            size: sizeFactor
+          };
+        });
+
+        // 4. Draw mesh lines (Optimized connections - only in foreground)
+        for (let i = 0; i < projected.length; i += 3) {
+          if (projected[i].z < -0.25) continue;
+          
+          for (let j = i + 1; j < projected.length; j += 4) {
+            if (projected[j].z < -0.25) continue;
+            
+            let dx = this.basePts[i].x - this.basePts[j].x;
+            let dy = this.basePts[i].y - this.basePts[j].y;
+            let dz = this.basePts[i].z - this.basePts[j].z;
+            let dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+            if (dist < this.connectDist) {
+              let zAvg = (projected[i].z + projected[j].z) / 2;
+              let alpha = Math.max(0, Math.min(0.2, (zAvg + 1) * 0.08 + 0.01)) * (1.0 + micVolume * 1.5);
+              
+              this.ctx.beginPath();
+              this.ctx.moveTo(projected[i].x, projected[i].y);
+              this.ctx.lineTo(projected[j].x, projected[j].y);
+              this.ctx.strokeStyle = pal.line.replace("0.2", alpha).replace("0.12", alpha);
+              this.ctx.lineWidth = 0.5;
+              this.ctx.stroke();
+            }
+          }
+        }
+
+        // 5. Draw dots
+        let sortedIndices = Array.from({length: projected.length}, (_, i) => i)
+                                 .sort((a, b) => projected[a].z - projected[b].z);
+
+        sortedIndices.forEach(idx => {
+          let p = projected[idx];
+          let brightness = (p.z + 1) / 2; 
+          let size = Math.max(1.0, 3.0 * brightness * p.size);
+          let alpha = (0.2 + 0.8 * brightness) * (this.state === "OFFLINE" ? 0.3 : 1.0);
+          
+          this.ctx.beginPath();
+          this.ctx.arc(p.x, p.y, size / 2, 0, 2 * Math.PI);
+          this.ctx.fillStyle = pal.core.replace("0.95", alpha);
+          this.ctx.fill();
+        });
+
+        // 6. Central Morphing Core
+        let coreR = R * 0.22;
+        let coreGlow = coreR * (1.2 + micVolume * 2.0);
+        
+        let grad = this.ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, coreGlow);
+        grad.addColorStop(0, pal.core.replace("0.95", "0.9"));
+        grad.addColorStop(0.3, pal.core.replace("0.95", "0.4"));
+        grad.addColorStop(1, "rgba(5, 6, 15, 0)");
+        
+        this.ctx.beginPath();
+        this.ctx.arc(centerX, centerY, coreGlow, 0, 2 * Math.PI);
+        this.ctx.fillStyle = grad;
+        this.ctx.fill();
+
+        // 7. Radial Equalizer sweeper lines
+        if (this.state === "SPEAKING" || this.state === "LISTENING") {
+          let spikeCount = 30;
+          let angleStep = (2 * Math.PI) / spikeCount;
+          
+          this.ctx.lineWidth = 1.0;
+          this.ctx.strokeStyle = pal.line.replace("0.2", "0.35").replace("0.12", "0.35");
+
+          for (let i = 0; i < spikeCount; i++) {
+            let angle = i * angleStep + this.time * 0.5;
+            let waveAmp = this.wave[i % this.wave.length];
+            
+            let startR = R * 0.95;
+            let endR = R * (0.95 + waveAmp * 0.6);
+            
+            let sx = centerX + Math.cos(angle) * startR;
+            let sy = centerY + Math.sin(angle) * startR;
+            let ex = centerX + Math.cos(angle) * endR;
+            let ey = centerY + Math.sin(angle) * endR;
+            
+            this.ctx.beginPath();
+            this.ctx.moveTo(sx, sy);
+            this.ctx.lineTo(ex, ey);
+            this.ctx.stroke();
+          }
+        }
+      }
+    }
+
+    const canvas = document.getElementById("sphere-canvas");
+    const sphere = new SphereCanvas(canvas);
+
+    function animate() {
+      let vol = sphere.tick();
+      sphere.draw(vol);
+      requestAnimationFrame(animate);
+    }
+    requestAnimationFrame(animate);
+
+    // ── Audio & Always-On Mic Logic ──────────────────────────────────────────
+    let isInitialized = false;
+    let audioContext, analyser, dataArray, micStream;
+    let recognition;
+    let shouldListen = false;
+
+    // Speech Synthesizer
+    function speakText(text) {
+      if (!isInitialized || !window.speechSynthesis) return;
+      window.speechSynthesis.cancel(); 
+      
+      let cleanText = text.replace(/\[[A-Z]+:[^\]]*\]/g, "");
+      cleanText = cleanText.replace(/\[[A-Z]+\]/g, "").trim();
+      if (!cleanText) return;
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = "en-US";
+      
+      const voices = window.speechSynthesis.getVoices();
+      const naturalVoice = voices.find(v => v.lang.includes("en-US") && (v.name.includes("Google") || v.name.includes("Natural"))) ||
+                          voices.find(v => v.lang.includes("en-US")) ||
+                          voices[0];
+      if (naturalVoice) utterance.voice = naturalVoice;
+
+      // When speaking, shift sphere to SPEAKING state locally (sync will also update)
+      utterance.onstart = () => {
+        sphere.setState("speaking");
+      };
+      
+      utterance.onend = () => {
+        // Return to listening state once speaking finishes
+        if (shouldListen) sphere.setState("listening");
+      };
+      
+      window.speechSynthesis.speak(utterance);
+    }
+
+    // Activate remote (triggered by tapping the sphere)
+    async function initializeRemote() {
+      if (isInitialized) return;
+
+      const overlay = document.getElementById("activation-overlay");
+      const connDot = document.getElementById("conn-dot");
+      const hubState = document.getElementById("hub-state");
+      const statusDisp = document.getElementById("status-display");
+
+      try {
+        // 1. Get microphone access for Web Audio analysis
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Initialize Audio context
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(micStream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        
+        const bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        
+        // Link to sphere
+        sphere.audioAnalyser = analyser;
+        sphere.audioDataArray = dataArray;
+
+        // 2. Setup always-on Speech Recognition
+        if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+          const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+          recognition = new SR();
+          recognition.continuous = true;
+          recognition.interimResults = false;
+          recognition.lang = "en-US";
+
+          recognition.onstart = () => {
+            shouldListen = true;
+            sphere.setState("listening");
+            hubState.textContent = "LISTENING";
+            hubState.style.color = "var(--green)";
+          };
+
+          recognition.onend = () => {
+            // Auto-restart recognition loop immediately to keep it "always online"
+            if (shouldListen) {
+              try {
+                recognition.start();
+              } catch(e) {
+                // Already started
+              }
+            }
+          };
+
+          recognition.onerror = (e) => {
+            console.log("Speech recognition error: ", e);
+            // Restart loop
+            if (shouldListen && e.error !== "not-allowed") {
+              setTimeout(() => {
+                try { recognition.start(); } catch(err) {}
+              }, 400);
+            }
+          };
+
+          recognition.onresult = e => {
+            const resultIdx = e.resultIndex;
+            const t = e.results[resultIdx][0].transcript;
+            
+            // Only send if it contains speech
+            if (t.trim()) {
+              showToast('Speech: "' + t + '"');
+              sendCommand(t);
+            }
+          };
+        } else {
+          showToast("Speech recognition not supported on this browser.");
+        }
+
+        // Mark initialized
+        isInitialized = true;
+        shouldListen = true;
+        
+        // Hide tap overlay
+        overlay.classList.add("hidden");
+        connDot.className = "status-dot waiting";
+        
+        // Play vocal greeting to confirm audio is fully unlocked
+        speakText("Aria remote online. Listening.");
+        statusDisp.textContent = "Listening continuously... just speak anytime.";
+
+        // Start Speech Recognition loop
+        if (recognition) {
+          recognition.start();
+        }
+
+        // 3. Connect to Firestore Live Status Listener
+        connectFirestore();
+
+      } catch (err) {
+        console.error("Initialization failed: ", err);
+        showToast("Permission denied: Mic access required.");
+      }
+    }
+
+    // ── Live Firestore Status Listener ───────────────────────────────────────
+    function connectFirestore() {
+      const connDot    = document.getElementById("conn-dot");
+      const hubState   = document.getElementById("hub-state");
+      const statusDisp = document.getElementById("status-display");
+
+      let lastSpokenText = "";
+
+      db.collection("status").doc("latest").onSnapshot(doc => {
+        if (!doc.exists) return;
+        const d = doc.data();
+        connDot.className = "status-dot"; // remove waiting/offline
+
+        statusDisp.textContent = d.last_response || "Connected.";
+        
+        const rawState = d.status || "idle";
+        
+        // Prevent shifting sphere state back to idle if we are speaking/listening locally
+        if (rawState !== "speaking") {
+          sphere.setState(rawState);
+          hubState.textContent = rawState.toUpperCase();
+        }
+
+        // Color mapping
+        if (rawState === "thinking") {
+          hubState.style.color = "rgba(var(--yellow-rgb), 1)";
+        } else if (rawState === "listening") {
+          hubState.style.color = "var(--green)";
+        } else if (rawState === "speaking") {
+          hubState.style.color = "rgba(var(--purple-rgb), 1)";
+        } else {
+          hubState.style.color = "var(--accent)";
+        }
+
+        // Play incoming spoken text responses automatically
+        if (d.last_response && d.last_response !== lastSpokenText) {
+          if (d.status === "speaking" || (d.status === "idle" && !d.last_response.startsWith("Executing:") && !d.last_response.startsWith("Done:") && !d.last_response.startsWith("Error:"))) {
+            speakText(d.last_response);
+            lastSpokenText = d.last_response;
+          }
+        }
+      }, err => {
+        connDot.className = "status-dot offline";
+        hubState.textContent = "OFFLINE";
+        hubState.style.color = "var(--red)";
+        sphere.setState("error");
+      });
+    }
+
+    // ── Send Command ─────────────────────────────────────────────────────────
+    function sendCommand(text) {
+      if (!text.trim()) return;
+      return db.collection("commands").doc("latest").set({
+        id:        "cmd_" + Date.now(),
+        text:      text.trim(),
+        timestamp: Date.now()
+      });
+    }
+
+    function sendCustomCommand() {
+      const el = document.getElementById("cmd-input");
+      const t  = el.value.trim();
+      if (!t) return;
+      sendCommand(t).then(() => showToast('Sent: "' + t + '"'));
+      el.value = "";
+    }
+
+    document.getElementById("cmd-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") sendCustomCommand();
+    });
+
+    function sendMacro(el, cmd) {
+      sendCommand(cmd).then(() => {
+        el.classList.add("sent");
+        setTimeout(() => el.classList.remove("sent"), 1200);
+        showToast('Sent: "' + cmd + '"');
+      });
+    }
+
+    function sendCtrl(cmd) {
+      sendCommand(cmd).then(() => showToast(cmd));
+    }
+
+    // Smooth scroll
+    document.querySelectorAll('.scroll-indicator').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        document.querySelector(this.getAttribute('href')).scrollIntoView({
+          behavior: 'smooth'
+        });
+      });
+    });
+
+    // ── Toast ─────────────────────────────────────────────────────────────────
+    let _toastTimer;
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+    }
+  </script>
+</body>
+</html>

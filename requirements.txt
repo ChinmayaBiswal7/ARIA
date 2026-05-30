@@ -1,0 +1,44 @@
+# ARIA - AI Assistant Requirements
+# Install with: pip install -r requirements.txt
+
+# Core AI
+google-generativeai>=0.8.0
+ollama>=0.4.0
+
+# Speech
+SpeechRecognition>=3.10.0
+pyttsx3>=2.90
+edge-tts>=6.1.1
+pygame>=2.5.0
+
+# Audio (choose one based on your system)
+# On Windows: install PyAudio via pip install pipwin && pipwin install pyaudio
+# OR: pip install pyaudio
+pyaudio
+
+# Vision & Camera
+opencv-python>=4.9.0
+Pillow>=10.0.0
+mss>=9.0.0
+ultralytics>=8.0.0
+mediapipe>=0.10.0
+
+# Automation
+pyautogui>=0.9.54
+AppOpener>=1.7
+
+# Face Recognition (optional but recommended)
+# Requires cmake + Visual Studio Build Tools on Windows
+# pip install cmake, then pip install dlib, then pip install face_recognition
+# Uncomment below if you have dlib installed:
+# face_recognition
+# dlib
+
+# GUI
+PyQt5>=5.15.0
+
+# Utilities
+numpy>=1.24.0
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+chromadb>=0.4.0

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mock Wikipedia</title>
+</head>
+<body>
+    <h1>Welcome to Mock Wikipedia</h1>
+    <p>The free encyclopedia that anyone can edit.</p>
+    
+    <div>
+        <label for="search">Search Wikipedia</label>
+        <input type="text" id="search" name="search" placeholder="Search Wikipedia" onkeydown="if(event.key === 'Enter') performSearch()">
+        <button id="search-btn" onclick="performSearch()">Search</button>
+    </div>
+
+    <div id="content" style="margin-top: 20px;">
+        <h3>Featured Articles</h3>
+        <ul>
+            <li><a href="?page=machine_learning" id="link-ml">Machine Learning</a></li>
+            <li><a href="?page=artificial_intelligence" id="link-ai">Artificial Intelligence</a></li>
+        </ul>
+    </div>
+
+    <script>
+        function performSearch() {
+            const query = document.getElementById('search').value;
+            if (query.toLowerCase().includes('machine learning')) {
+                window.location.search = '?page=machine_learning';
+            } else if (query.toLowerCase().includes('artificial intelligence')) {
+                window.location.search = '?page=artificial_intelligence';
+            } else {
+                document.getElementById('content').innerHTML = `
+                    <h3>Search Results</h3>
+                    <p>No results found for <b>${query}</b>.</p>
+                `;
+            }
+        }
+
+        // Simulate page routing
+        const params = new URLSearchParams(window.location.search);
+        const page = params.get('page');
+        if (page === 'machine_learning') {
+            document.getElementById('content').innerHTML = `
+                <h2>Machine Learning</h2>
+                <p>Machine learning is a field of study in artificial intelligence concerned with the development and study of statistical algorithms that can learn from data and generalize to unseen data.</p>
+                <p>It is widely used in speech recognition, computer vision, and email filtering.</p>
+            `;
+        } else if (page === 'artificial_intelligence') {
+            document.getElementById('content').innerHTML = `
+                <h2>Artificial Intelligence</h2>
+                <p>Artificial intelligence is the intelligence of machines or software, as opposed to the intelligence of human beings or animals.</p>
+                <p>It is an academic field of study which studies how to create computers and computer software that are capable of intelligent behavior.</p>
+            `;
+        }
+    </script>
+</body>
+</html>

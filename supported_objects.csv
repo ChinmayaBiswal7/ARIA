@@ -1,0 +1,81 @@
+ClassID,ItemName,Category
+0,person,People
+1,bicycle,Vehicles
+2,car,Vehicles
+3,motorcycle,Vehicles
+4,airplane,Vehicles
+5,bus,Vehicles
+6,train,Vehicles
+7,truck,Vehicles
+8,boat,Vehicles
+9,traffic light,Outdoor Objects
+10,fire hydrant,Outdoor Objects
+11,stop sign,Outdoor Objects
+12,parking meter,Outdoor Objects
+13,bench,Outdoor Objects
+14,bird,Animals
+15,cat,Animals
+16,dog,Animals
+17,horse,Animals
+18,sheep,Animals
+19,cow,Animals
+20,elephant,Animals
+21,bear,Animals
+22,zebra,Animals
+23,giraffe,Animals
+24,backpack,Accessories
+25,umbrella,Accessories
+26,handbag,Accessories
+27,tie,Accessories
+28,suitcase,Accessories
+29,frisbee,Sports/Toys
+30,skis,Sports/Toys
+31,snowboard,Sports/Toys
+32,sports ball,Sports/Toys
+33,kite,Sports/Toys
+34,baseball bat,Sports/Toys
+35,baseball glove,Sports/Toys
+36,skateboard,Sports/Toys
+37,surfboard,Sports/Toys
+38,tennis racket,Sports/Toys
+39,bottle,Kitchenware
+40,wine glass,Kitchenware
+41,cup,Kitchenware
+42,fork,Kitchenware
+43,knife,Kitchenware
+44,spoon,Kitchenware
+45,bowl,Kitchenware
+46,banana,Food
+47,apple,Food
+48,sandwich,Food
+49,orange,Food
+50,broccoli,Food
+51,carrot,Food
+52,hot dog,Food
+53,pizza,Food
+54,donut,Food
+55,cake,Food
+56,chair,Furniture
+57,couch,Furniture
+58,potted plant,Furniture
+59,bed,Furniture
+60,dining table,Furniture
+61,toilet,Furniture
+62,tv,Electronics
+63,laptop,Electronics
+64,mouse,Electronics
+65,remote,Electronics
+66,keyboard,Electronics
+67,cell phone,Electronics
+68,microwave,Appliances
+69,oven,Appliances
+70,toaster,Appliances
+71,sink,Appliances
+72,refrigerator,Appliances
+73,book,Household Items
+74,clock,Household Items
+75,vase,Household Items
+76,scissors,Household Items
+77,teddy bear,Household Items
+78,hair drier,Household Items
+79,toothbrush,Household Items

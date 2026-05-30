@@ -1,0 +1,6 @@
+# ARIA Telegram Authorized Chat ID Whitelist
+# Add one Chat ID per line. Lines starting with # are ignored.
+#
+# Examples:
+# 123456789
+# -987654321

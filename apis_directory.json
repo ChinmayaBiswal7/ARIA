@@ -1,0 +1,542 @@
+[
+  {
+    "name": "Public APIs",
+    "url": "https://github.com/davemachado/public-api",
+    "description": "Get a list of any or all public APIs currently cataloged in the project.",
+    "sample_url": "https://api.publicapis.org/entries"
+  },
+  {
+    "name": "isitdownstatus.com",
+    "url": "http://isitdownstatus.com",
+    "description": "View real-time status data for popular services (GitHub, Stripe, AWS, etc.)",
+    "sample_url": "https://isitdownstatus.com/api/v1/status/github"
+  },
+  {
+    "name": "CoinDesk",
+    "url": "http://www.coindesk.com/api/",
+    "description": "View the Bitcoin Price Index (BPI) in real-time.",
+    "sample_url": "https://api.coindesk.com/v1/bpi/currentprice.json"
+  },
+  {
+    "name": "Bored",
+    "url": "https://www.boredapi.com/",
+    "description": "Find something to do by getting suggestions for random activities.",
+    "sample_url": "https://www.boredapi.com/api/activity"
+  },
+  {
+    "name": "Agify.io",
+    "url": "https://agify.io/",
+    "description": "Predict the age of a person based on their name.",
+    "sample_url": "https://api.agify.io?name=meelad"
+  },
+  {
+    "name": "Genderize.io",
+    "url": "https://genderize.io/",
+    "description": "Predict the gender of a person based on their name.",
+    "sample_url": "https://api.genderize.io?name=luc"
+  },
+  {
+    "name": "Nationalize.io",
+    "url": "https://nationalize.io/",
+    "description": "Predict the nationality of a person based on their name.",
+    "sample_url": "https://api.nationalize.io?name=nathaniel"
+  },
+  {
+    "name": "Data USA",
+    "url": "https://datausa.io/about/api/",
+    "description": "Get US public data (e.g., population data, etc.).",
+    "sample_url": "https://datausa.io/api/data?drilldowns=Nation&measures=Population"
+  },
+  {
+    "name": "Dogs",
+    "url": "https://dog.ceo/dog-api/",
+    "description": "Cheer yourself up with random dog images.",
+    "sample_url": "https://dog.ceo/api/breeds/image/random"
+  },
+  {
+    "name": "IPify",
+    "url": "https://www.ipify.org/",
+    "description": "Get your current IP address.",
+    "sample_url": "https://api.ipify.org?format=json"
+  },
+  {
+    "name": "IPinfo",
+    "url": "https://ipinfo.io/developers",
+    "description": "Get information about a specified IP address, such as geological info, company, and carrier name.",
+    "sample_url": "https://ipinfo.io/161.185.160.93/geo"
+  },
+  {
+    "name": "Jokes",
+    "url": "https://github.com/15Dkatz/official_joke_api",
+    "description": "Get random jokes. You can also get jokes according to type (e.g., programming jokes only).",
+    "sample_url": "https://official-joke-api.appspot.com/random_joke"
+  },
+  {
+    "name": "RandomUser",
+    "url": "https://randomuser.me/",
+    "description": "Get information about a random fake user, including gender, name, email, address, etc.",
+    "sample_url": "https://randomuser.me/api/"
+  },
+  {
+    "name": "Universities List",
+    "url": "https://github.com/Hipo/university-domains-list",
+    "description": "Get a list of universities in a specified country.",
+    "sample_url": "http://universities.hipolabs.com/search?country=United+States"
+  },
+  {
+    "name": "Zippopotam",
+    "url": "http://www.zippopotam.us/",
+    "description": "Get information about a specified ZIP code.",
+    "sample_url": "https://api.zippopotam.us/us/33162"
+  },
+  {
+    "name": "Imgur",
+    "url": "https://apidocs.imgur.com/?version=latest",
+    "description": "Do anything you can do on Imgur.com.",
+    "sample_url": ""
+  },
+  {
+    "name": "YouTube to MP4",
+    "url": "https://rapidapi.com/aidangig/api/youtube-to-mp4/details",
+    "description": "An easy-to-grasp API that lets you input a YouTube video URL and fetch its source location.",
+    "sample_url": ""
+  },
+  {
+    "name": "Yoda Translator",
+    "url": "https://rapidapi.com/orthosie/api/yoda-translator/details",
+    "description": "Convert English into Yoda speak.",
+    "sample_url": ""
+  },
+  {
+    "name": "IMDB \u2013 Internet Movie Database (Unofficial)",
+    "url": "https://rapidapi.com/hmerritt/api/imdb-internet-movie-database-unofficial/details",
+    "description": "Fetch film data and search results from IMDB\u2019s film database.",
+    "sample_url": ""
+  },
+  {
+    "name": "Movie Database (IMDB Alternative)",
+    "url": "https://rapidapi.com/rapidapi/api/movie-database-imdb-alternative/details",
+    "description": "Access information, pictures, and more from a movie database \u2014 a decent alternative to IMDB.",
+    "sample_url": ""
+  },
+  {
+    "name": "Hearthstone",
+    "url": "https://rapidapi.com/omgvamp/api/hearthstone",
+    "description": "Pull up-to-date data directly from Hearthstone.",
+    "sample_url": ""
+  },
+  {
+    "name": "Meme Generator",
+    "url": "https://rapidapi.com/ronreiter/api/meme-generator",
+    "description": "Choose a pre-loaded image, input top and bottom text, and enjoy your freshly generated meme.",
+    "sample_url": ""
+  },
+  {
+    "name": "Tic Tac Toe",
+    "url": "https://rapidapi.com/stujo/api/tic-tac-toe",
+    "description": "Get Tic Tac Toe (AKA Noughts and Crosses) move suggestions.",
+    "sample_url": ""
+  },
+  {
+    "name": "Chart Lyrics",
+    "url": "http://api.chartlyrics.com/apiv1.asmx",
+    "description": "Get and add lyrics, or search for lyric information.",
+    "sample_url": ""
+  },
+  {
+    "name": "Text Similarity Calculator",
+    "url": "https://rapidapi.com/medel/api/text-similarity-calculator",
+    "description": "Calculate the similarity between two texts in percentage through approximate string matching.",
+    "sample_url": ""
+  },
+  {
+    "name": "Robohash Image Generator",
+    "url": "https://rapidapi.com/blaazetech/api/robohash-image-generator",
+    "description": "Generate a random and cool-looking robot image for your text.",
+    "sample_url": ""
+  },
+  {
+    "name": "Mirror-AI",
+    "url": "https://www.mirror-ai.com",
+    "description": "Get AI-personalized avatars, emojis, and sticker packs by uploading photos.",
+    "sample_url": ""
+  },
+  {
+    "name": "Love Calculator",
+    "url": "https://rapidapi.com/bhuvanweb/api/love-calculator5",
+    "description": "Find out the love compatibility of you and your partner based on your names.",
+    "sample_url": ""
+  },
+  {
+    "name": "SimSimi Conversation",
+    "url": "http://developer.simsimi.com",
+    "description": "Create a chatbot in 5 minutes.",
+    "sample_url": ""
+  },
+  {
+    "name": "Daily Comicstrips",
+    "url": "https://github.com/IE-NITK/ComicsAPI",
+    "description": "Get links to the most popular comic strips \u2014 Garfield, Dilbert, Peanuts, and more.",
+    "sample_url": ""
+  },
+  {
+    "name": "API-BASKETBALL",
+    "url": "https://www.api-basketball.com",
+    "description": "Get basketball data on major and minor competitions such as live score, standings, teams, odds, etc.",
+    "sample_url": ""
+  },
+  {
+    "name": "API-NBA",
+    "url": "https://rapidapi.com/api-sports/api/api-nba/details",
+    "description": "Get all NBA stats data including games, live score, players, seasons, leagues, etc.",
+    "sample_url": ""
+  },
+  {
+    "name": "API-FOOTBALL",
+    "url": "https://www.api-football.com/",
+    "description": "Get data for over 630 football leagues & cups \u2014 Livescore (15s), pre-match odds, events, etc.",
+    "sample_url": ""
+  },
+  {
+    "name": "API-FORMULA-1",
+    "url": "https://rapidapi.com/api-sports/api/api-formula-1/details",
+    "description": "Get all data about Formula 1, including circuits, teams, drivers, rankings.",
+    "sample_url": ""
+  },
+  {
+    "name": "TheRundown",
+    "url": "https://therundown.io",
+    "description": "Get real-time odds, scores, stats, and insights into the sports betting marketplace.",
+    "sample_url": ""
+  },
+  {
+    "name": "Football Prediction",
+    "url": "https://boggio-analytics.com/fp-api/",
+    "description": "Get predictions for upcoming football matches, average bookie odds, results for past matches, and prediction performance statistics for past results.",
+    "sample_url": ""
+  },
+  {
+    "name": "MLB Data",
+    "url": "https://appac.github.io/mlb-data-api-docs/",
+    "description": "Get baseball MLB data about players, teams, reports, and other stats.",
+    "sample_url": ""
+  },
+  {
+    "name": "Football Betting Tips",
+    "url": "https://rapidapi.com/scommetix/api/football-betting-tips/details",
+    "description": "Get daily betting tips and a collection of the best bets for free.",
+    "sample_url": ""
+  },
+  {
+    "name": "FIFA World Cup",
+    "url": "FIFA%20World%20Cup",
+    "description": "Get FIFA World Cup data, including teams, rounds, and matches in JSON format.",
+    "sample_url": ""
+  },
+  {
+    "name": "Horse Racing",
+    "url": "https://rapidapi.com/ortegalex/api/horse-racing/details",
+    "description": "Get horse racing data for UK & Ireland races, including race name, distance, going, age, runners, etc.",
+    "sample_url": ""
+  },
+  {
+    "name": "Fitness Calculator",
+    "url": "https://rapidapi.com/malaaddincelik/api/fitness-calculator/details",
+    "description": "Calculate important values such as ideal weight and body fat percentage, or prepare macronutrient diets.",
+    "sample_url": ""
+  },
+  {
+    "name": "Tennis Odds",
+    "url": "https://rapidapi.com/BettingAPI/api/tennis-odds/details",
+    "description": "Get tennis odds from over 50 bookmakers, updated every 3 \u2013 8 minutes.",
+    "sample_url": ""
+  },
+  {
+    "name": "3 Card Poker Odds",
+    "url": "https://rapidapi.com/dev52/api/3-card-poker-odds/details",
+    "description": "Calculate player winning possibility in Teen Patti (an Indian variant of poker) based on opened cards.",
+    "sample_url": ""
+  },
+  {
+    "name": "Hockey-LIVE.sk Data",
+    "url": "https://rapidapi.com/palsoft/api/hockey-live-sk-data/details",
+    "description": "Get player statistics, game reports, game schedule, team standings, and team statistics for top hockey leagues and tournaments like NHL, IIHF World Championships, and Olympic Games.",
+    "sample_url": ""
+  },
+  {
+    "name": "MMA/UFC News",
+    "url": "https://rapidapi.com/healthytechguy/api/mma-ufc-news/details",
+    "description": "Get the latest news in the UFC and MMA world, updated every hour in an easy to access JSON format.",
+    "sample_url": ""
+  },
+  {
+    "name": "Hotels",
+    "url": "https://rapidapi.com/apidojo/api/hotels4/details",
+    "description": "Query rooms, price, facilities, policies, etc. information from many hotels around the world as on the official site.",
+    "sample_url": ""
+  },
+  {
+    "name": "Flight Data",
+    "url": "https://rapidapi.com/Travelpayouts/api/flight-data/details",
+    "description": "Get travel insights for your site or blog, flight price trends, and find popular destinations for your customers.",
+    "sample_url": ""
+  },
+  {
+    "name": "TrailAPI",
+    "url": "https://rapidapi.com/trailapi/api/trailapi/details",
+    "description": "Get information and photos for tens of thousands of outdoor recreation locations including hiking and mountain biking trails, campgrounds, ski resorts, ATV trails, and more.",
+    "sample_url": ""
+  },
+  {
+    "name": "Great Circle Mapper",
+    "url": "https://www.greatcirclemapper.net/en/api.html",
+    "description": "Calculate the air distance and flight time between all airports worldwide.",
+    "sample_url": ""
+  },
+  {
+    "name": "IATA and ICAO Codes",
+    "url": "https://rapidapi.com/vacationist/api/iata-and-icao-codes/details",
+    "description": "Get access to rich up-to-date airline datasets",
+    "sample_url": ""
+  },
+  {
+    "name": "Railway Trains \u2013 India",
+    "url": "https://rapidapi.com/navii/api/railway-trains-india/details",
+    "description": "Look up Indian Railway Trains by train name or number",
+    "sample_url": ""
+  },
+  {
+    "name": "Airbnb.com",
+    "url": "https://rapidapi.com/WebDataHub.com/api/airbnb-com/details",
+    "description": "Get real-time, short-term, rental data from Airbnb.",
+    "sample_url": ""
+  },
+  {
+    "name": "Best Booking.com Hotel",
+    "url": "https://rapidapi.com/PlanYourTrip/api/best-booking-com-hotel/details",
+    "description": "Fetch the best booking.com hotel in town.",
+    "sample_url": ""
+  },
+  {
+    "name": "Gas Price",
+    "url": "https://www.collectapi.com/api/gasPrice/gas-prices-api",
+    "description": "Reach gasoline and diesel prices in different fuel stations in different cities.",
+    "sample_url": ""
+  },
+  {
+    "name": "Indian Railway PNR Status",
+    "url": "https://rapidapi.com/jerry.rahul2/api/indian-railway-pnr-status/details",
+    "description": "Get Indian Railway PNR details in JSON format.",
+    "sample_url": ""
+  },
+  {
+    "name": "BART",
+    "url": "http://api.bart.gov/docs/overview/examples.aspx",
+    "description": "Get access to all the BART service and station data available on the BART website.",
+    "sample_url": ""
+  },
+  {
+    "name": "Multimodal Trip Planner",
+    "url": "https://rapidapi.com/geoapify-gmbh-geoapify/api/multimodal-trip-planner/details",
+    "description": "Get routing and turn-by-turn directions for driving, cycling, walking, or multimodal public transportation.",
+    "sample_url": ""
+  },
+  {
+    "name": "Indonesian Train Schedule \u2013 Jadwal Kereta",
+    "url": "https://rapidapi.com/jadwalkeretaapi/api/indonesian-train-schedule-jadwal-kereta/details",
+    "description": "Get train schedules for up to 5 Indonesian train origin-destinations.",
+    "sample_url": ""
+  },
+  {
+    "name": "Sentiment Analysis 2.0 for Hotel Reviews",
+    "url": "http://unicornnlp.com/?Sentiment-Analysis-2.0-for-Hotel-Reviews",
+    "description": "Get 90% \u2013 95% accurate sentiment analysis data for hotel reviews, including client loyalty, hotel opinions, location opinions, etc.",
+    "sample_url": ""
+  },
+  {
+    "name": "BikeTheT",
+    "url": "https://github.com/shaisachs/BikeTheT",
+    "description": "Find out if you can take your bike on the MBTA.",
+    "sample_url": ""
+  },
+  {
+    "name": "Crunchbase",
+    "url": "https://rapidapi.com/crunchbase-team1-crunchbase/api/crunchbase/details",
+    "description": "Build powerful applications and integrate Crunchbase into your web and mobile applications.",
+    "sample_url": ""
+  },
+  {
+    "name": "Web Search",
+    "url": "https://rapidapi.com/contextualwebsearch/api/web-search/details",
+    "description": "Get a list of relevant results from a search query that includes images, news, and related searches.",
+    "sample_url": ""
+  },
+  {
+    "name": "GeoDB Cities",
+    "url": "http://geodb-cities-api.wirefreethought.com",
+    "description": "Get basic info about cities, counties, regions, and countries throughout the world.",
+    "sample_url": ""
+  },
+  {
+    "name": "Get Video and Audio URL",
+    "url": "https://rapidapi.com/Top-Rated/api/get-video-and-audio-url/details",
+    "description": "Get direct links to download video or audio files from almost any hosting website, like Vimeo, Twitch, SoundCloud, etc.",
+    "sample_url": ""
+  },
+  {
+    "name": "Weather",
+    "url": "https://www.weatherbit.io",
+    "description": "Get access to current weather data or historical weather data.",
+    "sample_url": ""
+  },
+  {
+    "name": "Whois Lookup",
+    "url": "https://whoisjson.com",
+    "description": "Get up-to-minute results by pulling records from origin Whois servers in real-time.",
+    "sample_url": ""
+  },
+  {
+    "name": "WordsAPI",
+    "url": "https://www.wordsapi.com/",
+    "description": "Get information about English words, including definitions, synonyms, rhymes, pronunciation, syllables, and frequency of usage, or find out about the relationships between words.",
+    "sample_url": ""
+  },
+  {
+    "name": "URL Intelligence",
+    "url": "https://api-url.com/",
+    "description": "Extract links and info from a given URL.",
+    "sample_url": ""
+  },
+  {
+    "name": "URL Shortener Service",
+    "url": "https://rapidapi.com/BigLobster/api/url-shortener-service/details",
+    "description": "Create a short new URL from a long URL",
+    "sample_url": ""
+  },
+  {
+    "name": "IP Geolocation \u2013 IPWHOIS.io",
+    "url": "https://ipwhois.io",
+    "description": "Filter out bot traffic, customize content based on visitor\u2019s location, display full country names, perform bulk IP geolocation, and more.",
+    "sample_url": ""
+  },
+  {
+    "name": "COVID-19 Data",
+    "url": "https://covid19-api.com/",
+    "description": "Get live information on COVID-19 from reliable sources like Johns Hopkins CSSE, CDC, WHO, and others.",
+    "sample_url": ""
+  },
+  {
+    "name": "Quotes",
+    "url": "https://rapidapi.com/martin.svoboda/api/quotes15/details",
+    "description": "Get random quotes in various languages from best-rated quotes from QuotePark.com.",
+    "sample_url": ""
+  },
+  {
+    "name": "Company Name Match",
+    "url": "https://rapidapi.com/interzoid/api/company-name-match/details",
+    "description": "Identify redundant or duplicate customer information within a database or CRM system as a basis for matching records when combining multiple data sources, or as a searching mechanism to find \u201csimilar\u201d results of company names using the similarity keys as the basis for a match.",
+    "sample_url": ""
+  },
+  {
+    "name": "Mashvisor",
+    "url": "https://rapidapi.com/mashvisor-team/api/mashvisor/details",
+    "description": "Access all the endpoints you need to build your application on top of Mashvisor Inc.",
+    "sample_url": ""
+  },
+  {
+    "name": "Rent Estimate",
+    "url": "https://rapidapi.com/moneals/api/rent-estimate/details",
+    "description": "Get accurate and current estimated rent for a property, based on millions of records in Realty Mole\u2019s real estate property database.",
+    "sample_url": ""
+  },
+  {
+    "name": "Bloomberg Market and Financial News",
+    "url": "https://rapidapi.com/apidojo/api/bloomberg-market-and-financial-news/details",
+    "description": "Query all information about indices, commodities, currencies, futures, rates, bonds, etc. as on the official Bloomberg website.",
+    "sample_url": ""
+  },
+  {
+    "name": "Alpha Vantage",
+    "url": "https://www.alphavantage.co",
+    "description": "Get real-time and historical data on stocks, forex (FX), and cryptocurrencies/digital currencies.",
+    "sample_url": ""
+  },
+  {
+    "name": "BraveNewCoin",
+    "url": "https://rapidapi.com/BraveNewCoin/api/bravenewcoin/details",
+    "description": "Get the latest details for an asset refreshed every 5 minutes with the global USD spot price, 24-hour volume, and supply, or end-of-day open, high, low, close prices and volumes (OHLCV) for market-weighted averages (MWA) or global weighted averages (GWA).",
+    "sample_url": ""
+  },
+  {
+    "name": "Morningstar",
+    "url": "https://rapidapi.com/integraatio/api/morningstar1/details",
+    "description": "Query common stock fundamentals and other data from the Morningstar website transformed into a convenient JSON format.",
+    "sample_url": ""
+  },
+  {
+    "name": "Currency Converter",
+    "url": "https://rapidapi.com/natkapral/api/currency-converter5/details",
+    "description": "Convert one currency to another, with support for 148 currencies worldwide based on the data provided by Central Banks.",
+    "sample_url": ""
+  },
+  {
+    "name": "Stock and Options Trading Data Provider",
+    "url": "https://rapidapi.com/mpeng/api/stock-and-options-trading-data-provider/details",
+    "description": "Get real-time Options and Stock data for United States-listed options in easy to consume JSON format.",
+    "sample_url": ""
+  },
+  {
+    "name": "Yahoo Finance",
+    "url": "https://rapidapi.com/apidojo/api/yahoo-finance1/details",
+    "description": "Query all information about finance summary, stocks, quotes, movers, etc. as on the official Yahoo Finance website.",
+    "sample_url": ""
+  },
+  {
+    "name": "Currency",
+    "url": "https://rapidapi.com/labstack/api/currency13/details",
+    "description": "Get accurate and reliable currency exchange rates for over 150 currencies.",
+    "sample_url": ""
+  },
+  {
+    "name": "Option Chain",
+    "url": "https://rapidapi.com/mpeng/api/option-chain/details",
+    "description": "Get option chain and stock data in easy to consume JSON format.",
+    "sample_url": ""
+  },
+  {
+    "name": "Financial Modeling Prep",
+    "url": "https://rapidapi.com/theskateba74/api/financial-modeling-prep/details",
+    "description": "Get all companies\u2019 financial reports, company stock prices in real-time.",
+    "sample_url": ""
+  },
+  {
+    "name": "Latest Mutual Fund NAV",
+    "url": "https://rapidapi.com/suneetk92/api/latest-mutual-fund-nav/details",
+    "description": "Get the latest NAV information of all mutual funds in India from the Association of Mutual Funds of India (AMFI).",
+    "sample_url": ""
+  },
+  {
+    "name": "Breaking News",
+    "url": "https://rapidapi.com/MyAllies/api/breaking-news/details",
+    "description": "Get news from across the globe and information on the latest breaking business and financial news.",
+    "sample_url": ""
+  },
+  {
+    "name": "Gold Price \u2013 Live",
+    "url": "https://rapidapi.com/ai-box-ai-box-default/api/gold-price-live/details",
+    "description": "Get the current latest price of gold and silver in US dollars per ounce.",
+    "sample_url": ""
+  },
+  {
+    "name": "Mortgage Payments",
+    "url": "https://rapidapi.com/shaisachs/api/mortgage-payments/details",
+    "description": "Calculate monthly mortgage payments, including principal and interest, taxes, homeowners insurance, and mortgage insurance.",
+    "sample_url": ""
+  },
+  {
+    "name": "Global Ethereum Price Index \u2013 GEX",
+    "url": "https://rapidapi.com/blockchain-data-ltd-blockchain-data-ltd-default/api/global-ethereum-price-index-gex/details",
+    "description": "Get GEX data for 165+ currencies dating back to 2010 in easy to consume JSON format.",
+    "sample_url": ""
+  }
+]

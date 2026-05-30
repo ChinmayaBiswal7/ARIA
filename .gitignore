@@ -1,0 +1,49 @@
+# Virtual Environment
+aria_env/
+venv/
+ENV/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project Databases, Credentials, and Keys (Security)
+.env
+api_key.txt
+groq_api_key.txt
+serviceAccountKey.json
+aria_memory.db
+chroma_db/
+face_memory/dataset/
+face_memory/face_model.yml
+object_store/
+
+# Large Datasets and Pre-trained Models
+dolly_dataset.csv
+yolov8n.pt
+
+# Audio Outputs
+*.mp3
+*.wav
+
+# Log files, Temp Files, and Screenshots
+.pytest_cache/
+.firebase/
+last_screenshot.png
+screenshot_*.png
+test_vision_shot.png
+*.log
+
+# OS-specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini

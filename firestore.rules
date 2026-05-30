@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Phone can READ laptop status (so it shows online/offline)
+    match /status/{doc} {
+      allow read: if true;
+      allow write: if false; // only laptop writes this
+    }
+
+    // Phone can WRITE commands (so buttons work)
+    match /commands/{doc} {
+      allow write: if true;
+      allow read: if false; // only laptop reads this
+    }
+  }
+}

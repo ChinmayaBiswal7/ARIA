@@ -1,0 +1,104 @@
+{
+  "commands": [
+    {
+      "phrase": "I want to show you object learn from that not phrase",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "open telegram",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close telegram",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "type hello chinmay",
+      "category": "TYPE"
+    },
+    {
+      "phrase": "search for offline models",
+      "category": "SEARCH"
+    },
+    {
+      "phrase": "open unigram",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close unigram",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open discord",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close discord",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open whatsapp",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close whatsapp",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open spotify",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close spotify",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open steam",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close steam",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open paint",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close paint",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open calculator",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close calculator",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open cmd",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close cmd",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open powershell",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close powershell",
+      "category": "CLOSE"
+    },
+    {
+      "phrase": "open visual studio",
+      "category": "OPEN"
+    },
+    {
+      "phrase": "close visual studio",
+      "category": "CLOSE"
+    }
+  ]
+}
