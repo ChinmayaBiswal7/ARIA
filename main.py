@@ -3607,14 +3607,16 @@ Rules:
 
         # Check "this is" as a divider
         if not face_trigger_found and not object_trigger_found and "this is " in inp:
-            raw_suffix = inp.split("this is ", 1)[1].strip()
-            # If suffix starts with an article, it's an object. Otherwise, it's a person/face.
-            if any(raw_suffix.lower().startswith(w) for w in ["a ", "an ", "the "]):
-                object_trigger_found = "this is "
-            elif "me" == raw_suffix.lower().strip(".,?! "):
-                face_trigger_found = "this is me"
-            else:
-                face_trigger_found = "this is "
+            ar_terms = ["ar mode", "ar playground", "air mode", "air playground", "piano mode", "wand mode", "pet mode", "flower mode", "garden mode"]
+            if not any(term in inp.lower() for term in ar_terms):
+                raw_suffix = inp.split("this is ", 1)[1].strip()
+                # If suffix starts with an article, it's an object. Otherwise, it's a person/face.
+                if any(raw_suffix.lower().startswith(w) for w in ["a ", "an ", "the "]):
+                    object_trigger_found = "this is "
+                elif "me" == raw_suffix.lower().strip(".,?! "):
+                    face_trigger_found = "this is me"
+                else:
+                    face_trigger_found = "this is "
 
         trigger_found = face_trigger_found or object_trigger_found
         if trigger_found:
@@ -4417,7 +4419,11 @@ Rules:
             "ar wand mode", "ar magic mode", "ar trail mode",
             "ar flower mode", "ar garden mode",
             "ar piano mode", "ar synth mode",
-            "ar pet mode", "ar cat mode"
+            "ar pet mode", "ar cat mode",
+            "air wand mode", "air magic mode", "air trail mode",
+            "air flower mode", "air garden mode",
+            "air piano mode", "air synth mode",
+            "air pet mode", "air cat mode"
         ]):
             try:
                 if self.gesture_mode:
@@ -4442,16 +4448,16 @@ Rules:
                 self.ar_playground.start()
                 self.ar_mode = True
 
-                if any(x in inp for x in ["ar wand mode", "ar magic mode", "ar trail mode"]):
+                if any(x in inp for x in ["ar wand mode", "ar magic mode", "ar trail mode", "air wand mode", "air magic mode", "air trail mode"]):
                     self.ar_playground.set_mode("wand")
                     self._speak("Magic Wand mode active.")
-                elif any(x in inp for x in ["ar flower mode", "ar garden mode"]):
+                elif any(x in inp for x in ["ar flower mode", "ar garden mode", "air flower mode", "air garden mode"]):
                     self.ar_playground.set_mode("flowers")
                     self._speak("Flower Garden mode active.")
-                elif any(x in inp for x in ["ar piano mode", "ar synth mode"]):
+                elif any(x in inp for x in ["ar piano mode", "ar synth mode", "air piano mode", "air synth mode"]):
                     self.ar_playground.set_mode("piano")
                     self._speak("Air Piano mode active.")
-                elif any(x in inp for x in ["ar pet mode", "ar cat mode"]):
+                elif any(x in inp for x in ["ar pet mode", "ar cat mode", "air pet mode", "air cat mode"]):
                     self.ar_playground.set_mode("pet")
                     self._speak("Virtual Pet mode active.")
             except Exception as e:
@@ -4462,7 +4468,9 @@ Rules:
         # ─ AR Playground ON/OFF Toggle ─
         if any(x in inp for x in [
             "disable ar playground", "ar playground off", "stop ar mode", "ar mode off",
-            "stop ar playground", "disable ar mode"
+            "stop ar playground", "disable ar mode",
+            "disable air playground", "air playground off", "stop air mode", "air mode off",
+            "stop air playground", "disable air mode"
         ]):
             try:
                 if self.ar_playground:
@@ -4477,7 +4485,9 @@ Rules:
 
         if any(x in inp for x in [
             "enable ar playground", "ar playground on", "start ar mode", "ar mode on",
-            "ar playground", "start ar playground", "enable ar mode"
+            "ar playground", "start ar playground", "enable ar mode",
+            "enable air playground", "air playground on", "start air mode", "air mode on",
+            "air playground", "start air playground", "enable air mode"
         ]):
             try:
                 if self.gesture_mode:
