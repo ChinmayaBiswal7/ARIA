@@ -34,6 +34,12 @@ _SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_DIR = os.path.dirname(_SKILL_DIR)
 _MODEL_PATH = os.path.join(_PROJECT_DIR, "models", "hand_landmarker.task")
 
+# Minimal HUD Redesign Color Palette
+WHITE     = (255, 255, 255)
+GRAY_DARK = (40, 40, 40)
+GRAY_MID  = (120, 120, 120)
+ACCENT    = (200, 200, 200)
+
 # ─── Audio Synthesis Helper ───────────────────────────────────────────────────
 def generate_tone(frequency, duration=0.3, sample_rate=44100, volume=12000, type="sine"):
     """Generate a NumPy-synthesized pygame Sound with decay envelope."""
@@ -149,14 +155,6 @@ class ARPlayground:
 
     def stop(self):
         self._running = False
-        if self._thread:
-            self._thread.join(timeout=2.0)
-        try:
-            cv2.destroyWindow(self.WINDOW)
-            for _ in range(5):
-                cv2.waitKey(1)
-        except Exception:
-            pass
         print("[ARPlayground] Subsystem stopped.")
 
     def _on_result(self, result, _output_image, _timestamp_ms):
@@ -179,6 +177,10 @@ class ARPlayground:
         with _mp_vision.HandLandmarker.create_from_options(options) as landmarker:
             ts = 0
             hand_lost_frames = 0
+
+            # Create named window with normal/resizable property and set default size
+            cv2.namedWindow(self.WINDOW, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.WINDOW, 1280, 720)
 
             while self._running:
                 t0 = time.time()
@@ -222,6 +224,8 @@ class ARPlayground:
 
         self._running = False
         try:
+            for _ in range(5):
+                cv2.waitKey(1)
             cv2.destroyWindow(self.WINDOW)
             for _ in range(5):
                 cv2.waitKey(1)
@@ -230,239 +234,233 @@ class ARPlayground:
 
     # ── Update & Draw Main Routine ────────────────────────────────────────────
     def _update_and_draw(self, display, lm, w, h, hand_lost):
-        # 1. Gather Hand Landmarks in screen coordinates
+        # 1. Corner brackets instead of full border
+        bracket_len = 20
+        # top-left
+        cv2.line(display, (0, 0), (bracket_len, 0), WHITE, 1)
+        cv2.line(display, (0, 0), (0, bracket_len), WHITE, 1)
+        # top-right
+        cv2.line(display, (w - 1, 0), (w - 1 - bracket_len, 0), WHITE, 1)
+        cv2.line(display, (w - 1, 0), (w - 1, bracket_len), WHITE, 1)
+        # bottom-left
+        cv2.line(display, (0, h - 1), (bracket_len, h - 1), WHITE, 1)
+        cv2.line(display, (0, h - 1), (0, h - 1 - bracket_len), WHITE, 1)
+        # bottom-right
+        cv2.line(display, (w - 1, h - 1), (w - 1 - bracket_len, h - 1), WHITE, 1)
+        cv2.line(display, (w - 1, h - 1), (w - 1, h - 1 - bracket_len), WHITE, 1)
+
+        # 2. Gather Hand Landmarks in screen coordinates
         landmarks = {}
         n_fingers_up = 0
         is_fist = False
 
-        if not hand_lost and lm is not None:
-            # Map landmarks to pixel space
-            for idx in [4, 8, 12, 16, 20, 3, 6, 10, 14, 18]:
-                landmarks[idx] = (int(lm[idx].x * w), int(lm[idx].y * h))
+        if hand_lost:
+            self.clear_canvas()
+            # Reset piano key state when hand is lost
+            self.piano_key_pressed = [False] * 5
+        else:
+            if lm is not None:
+                # Map landmarks to pixel space
+                for idx in [4, 8, 12, 16, 20, 3, 6, 10, 14, 18]:
+                    landmarks[idx] = (int(lm[idx].x * w), int(lm[idx].y * h))
 
-            # Detect raised fingers
-            # thumb, index, middle, ring, pinky
-            thumb_up = lm[4].y < lm[3].y
-            index_up = lm[8].y < lm[6].y
-            middle_up = lm[12].y < lm[10].y
-            ring_up = lm[16].y < lm[14].y
-            pinky_up = lm[20].y < lm[18].y
-            
-            n_fingers_up = sum([thumb_up, index_up, middle_up, ring_up, pinky_up])
-            # Fist detection: all fingers down
-            is_fist = not (index_up or middle_up or ring_up or pinky_up)
-
-        # 2. Closed Fist Erase Feature
-        if is_fist and 8 in landmarks:
-            fist_pt = landmarks[8]
-            # Spawn dark eraser particles
-            for _ in range(3):
-                self.particles.append({
-                    "pos": [fist_pt[0] + random.randint(-15, 15), fist_pt[1] + random.randint(-15, 15)],
-                    "vel": [random.uniform(-1, 1), random.uniform(-1, 1)],
-                    "color": (25, 25, 40),
-                    "size": random.randint(8, 15),
-                    "age": 0,
-                    "max_age": 12
-                })
-            # Erase nearby elements
-            self.flowers = [f for f in self.flowers if _dist(f["pos"], fist_pt) > 80]
-            self.particles = [p for p in self.particles if _dist(p["pos"], fist_pt) > 80 or p["color"] == (25, 25, 40)]
-
-        # 3. Mode Processing
-        if not hand_lost and 8 in landmarks and not is_fist:
-            index_pt = landmarks[8]
-
-            if self._mode == "wand":
-                # Magic Wand particle generation
-                for _ in range(2):
-                    self.particles.append({
-                        "pos": [index_pt[0], index_pt[1]],
-                        "vel": [random.uniform(-2, 2), random.uniform(-3, 1)],
-                        "color": (random.randint(0, 50), random.randint(200, 255), random.randint(220, 255)), # cyan glow
-                        "size": random.randint(4, 8),
-                        "age": 0,
-                        "max_age": 20
-                    })
-
-            elif self._mode == "flowers":
-                # Plant flowers by holding/tapping
-                # Check if we should spawn a flower at fingertip
-                if random.random() < 0.12 and len(self.flowers) < self.MAX_FLOWERS:
-                    # Choose a beautiful flower color
-                    col = random.choice([
-                        (203, 105, 255),  # magenta
-                        (255, 120, 180),  # soft pink
-                        (0, 230, 255),    # neon yellow
-                        (100, 255, 150)   # mint green
-                    ])
-                    self.flowers.append({
-                        "pos": [index_pt[0], index_pt[1]],
-                        "size": 0.0,
-                        "target_size": random.randint(22, 38),
-                        "rot": random.uniform(0, 2 * math.pi),
-                        "rot_speed": random.uniform(-0.05, 0.05),
-                        "color": col,
-                        "bloom_speed": random.uniform(0.04, 0.08)
-                    })
-
-            elif self._mode == "piano":
-                # Air Piano Keys configuration (drawn dynamically at bottom)
-                key_w = w // 5
-                key_h = 75
-                self.piano_keys = []
-                for i in range(5):
-                    self.piano_keys.append((i * key_w, h - key_h, (i + 1) * key_w, h))
-
-                # Check fingertips collision with piano keys
-                fingertips = [8, 12, 16, 20]
-                active_keys = [False] * 5
-
-                for f_idx in fingertips:
-                    if f_idx in landmarks:
-                        pt = landmarks[f_idx]
-                        for k_idx, rect in enumerate(self.piano_keys):
-                            if rect[0] <= pt[0] <= rect[2] and rect[1] <= pt[1] <= rect[3]:
-                                active_keys[k_idx] = True
-
-                # Play sound on transitions (rising edge check)
-                for k_idx, active in enumerate(active_keys):
-                    if active and not self.piano_key_pressed[k_idx]:
-                        if f"note_{k_idx}" in self.sounds and self.sounds[f"note_{k_idx}"]:
-                            self.sounds[f"note_{k_idx}"].play()
-                        self.piano_key_pressed[k_idx] = True
-
-                        # Spawn rising musical note particles
-                        rect = self.piano_keys[k_idx]
-                        key_center = (rect[0] + rect[2]) // 2
-                        for _ in range(5):
-                            self.particles.append({
-                                "pos": [key_center + random.randint(-15, 15), rect[1]],
-                                "vel": [random.uniform(-1, 1), random.uniform(-3, -1)],
-                                "color": (random.randint(180, 255), random.randint(100, 255), 80),
-                                "size": random.randint(3, 6),
-                                "age": 0,
-                                "max_age": 25,
-                                "type": "music"
-                            })
-                    elif not active:
-                        self.piano_key_pressed[k_idx] = False
-
-            elif self._mode == "pet":
-                # Cat follows index finger smoothly
-                self.pet_pos[0] += (index_pt[0] - self.pet_pos[0]) * 0.08
-                self.pet_pos[1] += (index_pt[1] - self.pet_pos[1]) * 0.08
-
-                # If very close to index finger -> "Petting" state
-                dist_to_finger = _dist(self.pet_pos, index_pt)
-                now = time.time()
-                if dist_to_finger < 45:
-                    self.pet_state = "petting"
-                    # Pulse purring sound
-                    if now - self.pet_last_mew > 0.35:
-                        if "purr" in self.sounds and self.sounds["purr"]:
-                            self.sounds["purr"].play()
-                        self.pet_last_mew = now
-                    # Spawn hearts
-                    if random.random() < 0.15:
-                        self.particles.append({
-                            "pos": [int(self.pet_pos[0]) + random.randint(-15, 15), int(self.pet_pos[1]) - 10],
-                            "vel": [random.uniform(-1, 1), random.uniform(-2, -0.8)],
-                            "color": (80, 80, 255), # Red in BGR (or pink: 147, 20, 255)
-                            "size": random.randint(4, 7),
-                            "age": 0,
-                            "max_age": 22,
-                            "type": "heart"
-                        })
-                else:
-                    self.pet_state = "walking"
-                    if now - self.pet_last_mew > 4.5 and random.random() < 0.02:
-                        # Soft mew chirp
-                        if "mew" in self.sounds and self.sounds["mew"]:
-                            self.sounds["mew"].play()
-                        self.pet_last_mew = now
-
-        # Update and Draw Flowers (Phase 2)
-        for f in self.flowers:
-            # Bloom animation
-            if f["size"] < f["target_size"]:
-                f["size"] += (f["target_size"] - f["size"]) * f["bloom_speed"]
-            f["rot"] += f["rot_speed"]
-            self._draw_procedural_flower(display, f)
-
-        # Draw Piano keyboard keys (Phase 3)
-        if self._mode == "piano":
-            key_colors = [
-                (50, 50, 255),   # C4 Red BGR
-                (50, 150, 255),  # D4 Orange
-                (50, 255, 255),  # E4 Yellow
-                (50, 255, 50),   # F4 Green
-                (255, 100, 50)   # G4 Blue
-            ]
-            key_names = ["C4", "D4", "E4", "F4", "G4"]
-            for i, rect in enumerate(self.piano_keys):
-                is_active = self.piano_key_pressed[i]
-                col = key_colors[i]
-                if is_active:
-                    # Draw a solid glowing key
-                    cv2.rectangle(display, (rect[0], rect[1]), (rect[2], rect[3]), col, -1)
-                    cv2.rectangle(display, (rect[0], rect[1]), (rect[2], rect[3]), (255, 255, 255), 2)
-                else:
-                    # Draw semi-transparent key boundaries
-                    overlay = display.copy()
-                    cv2.rectangle(overlay, (rect[0], rect[1]), (rect[2], rect[3]), col, -1)
-                    cv2.addWeighted(overlay, 0.25, display, 0.75, 0, display)
-                    cv2.rectangle(display, (rect[0], rect[1]), (rect[2], rect[3]), col, 1)
+                # Detect raised fingers
+                thumb_up = lm[4].y < lm[3].y
+                index_up = lm[8].y < lm[6].y
+                middle_up = lm[12].y < lm[10].y
+                ring_up = lm[16].y < lm[14].y
+                pinky_up = lm[20].y < lm[18].y
                 
-                # Label keys
-                cv2.putText(display, key_names[i], (rect[0] + 12, rect[1] + 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                n_fingers_up = sum([thumb_up, index_up, middle_up, ring_up, pinky_up])
+                # Fist detection
+                is_fist = not (index_up or middle_up or ring_up or pinky_up)
 
-        # Draw Virtual Pet Cat (Phase 4)
-        if self._mode == "pet":
-            self._draw_hologram_cat(display)
+            # 3. Closed Fist Erase Feature
+            if is_fist and 8 in landmarks:
+                fist_pt = landmarks[8]
+                for _ in range(3):
+                    self.particles.append({
+                        "pos": [fist_pt[0] + random.randint(-15, 15), fist_pt[1] + random.randint(-15, 15)],
+                        "vel": [random.uniform(-1, 1), random.uniform(-1, 1)],
+                        "color": (25, 25, 40),
+                        "size": random.randint(8, 15),
+                        "age": 0,
+                        "max_age": 12
+                    })
+                self.flowers = [f for f in self.flowers if _dist(f["pos"], fist_pt) > 80]
+                self.particles = [p for p in self.particles if _dist(p["pos"], fist_pt) > 80 or p["color"] == (25, 25, 40)]
 
-        # Update and Draw Particles (Trail, Sparkles, Hearts)
-        dead_particles = []
-        for p in self.particles:
-            p["pos"][0] += p["vel"][0]
-            p["pos"][1] += p["vel"][1]
-            p["age"] += 1
-            if p["age"] >= p["max_age"]:
-                dead_particles.append(p)
-                continue
+            # 4. Mode Processing
+            if 8 in landmarks and not is_fist:
+                index_pt = landmarks[8]
 
-            # Draw particle based on type
-            alpha = (p["max_age"] - p["age"]) / p["max_age"]
-            sz = max(1, int(p["size"] * alpha))
-            col = p["color"]
-            pt = (int(p["pos"][0]), int(p["pos"][1]))
+                if self._mode == "wand":
+                    for _ in range(2):
+                        self.particles.append({
+                            "pos": [index_pt[0], index_pt[1]],
+                            "vel": [random.uniform(-2, 2), random.uniform(-3, 1)],
+                            "color": (random.randint(0, 50), random.randint(200, 255), random.randint(220, 255)), # cyan glow
+                            "size": random.randint(4, 8),
+                            "age": 0,
+                            "max_age": 20
+                        })
 
-            if p.get("type") == "heart":
-                # Draw heart shape approximation (two small circles + triangle bottom)
-                cv2.circle(display, (pt[0]-2, pt[1]-2), sz//2, col, -1)
-                cv2.circle(display, (pt[0]+2, pt[1]-2), sz//2, col, -1)
-                pts = np.array([[pt[0]-sz, pt[1]], [pt[0]+sz, pt[1]], [pt[0], pt[1]+sz]], np.int32)
-                cv2.fillPoly(display, [pts], col)
-            elif p.get("type") == "music":
-                # Draw a simple music note outline (note head + stem)
-                cv2.circle(display, pt, sz, col, -1)
-                cv2.line(display, (pt[0]+sz//2, pt[1]), (pt[0]+sz//2, pt[1]-sz*2), col, 1)
-                cv2.line(display, (pt[0]+sz//2, pt[1]-sz*2), (pt[0]+sz//2+sz, pt[1]-sz*2+sz//2), col, 1)
-            else:
-                # Regular circular trail particles
-                cv2.circle(display, pt, sz, col, -1)
+                elif self._mode == "flowers":
+                    if random.random() < 0.12 and len(self.flowers) < self.MAX_FLOWERS:
+                        col = random.choice([
+                            (203, 105, 255),  # magenta
+                            (255, 120, 180),  # soft pink
+                            (0, 230, 255),    # neon yellow
+                            (100, 255, 150)   # mint green
+                        ])
+                        self.flowers.append({
+                            "pos": [index_pt[0], index_pt[1]],
+                            "size": 0.0,
+                            "target_size": random.randint(22, 38),
+                            "rot": random.uniform(0, 2 * math.pi),
+                            "rot_speed": random.uniform(-0.05, 0.05),
+                            "color": col,
+                            "bloom_speed": random.uniform(0.04, 0.08)
+                        })
 
-        # Erase dead particles
-        for p in dead_particles:
-            if p in self.particles:
-                self.particles.remove(p)
+                elif self._mode == "piano":
+                    key_w = w // 5
+                    key_h = 75
+                    self.piano_keys = []
+                    for i in range(5):
+                        self.piano_keys.append((i * key_w, h - key_h, (i + 1) * key_w, h))
 
-        # Limit particles in memory
-        if len(self.particles) > self.MAX_PARTICLES:
-            self.particles = self.particles[-self.MAX_PARTICLES:]
+                    fingertips = [8, 12, 16, 20]
+                    active_keys = [False] * 5
 
-        # 4. HUD / Text Panel
+                    for f_idx in fingertips:
+                        if f_idx in landmarks:
+                            pt = landmarks[f_idx]
+                            for k_idx, rect in enumerate(self.piano_keys):
+                                if rect[0] <= pt[0] <= rect[2] and rect[1] <= pt[1] <= rect[3]:
+                                    active_keys[k_idx] = True
+
+                    for k_idx, active in enumerate(active_keys):
+                        if active and not self.piano_key_pressed[k_idx]:
+                            if f"note_{k_idx}" in self.sounds and self.sounds[f"note_{k_idx}"]:
+                                self.sounds[f"note_{k_idx}"].play()
+                            self.piano_key_pressed[k_idx] = True
+
+                            rect = self.piano_keys[k_idx]
+                            key_center = (rect[0] + rect[2]) // 2
+                            for _ in range(5):
+                                self.particles.append({
+                                    "pos": [key_center + random.randint(-15, 15), rect[1]],
+                                    "vel": [random.uniform(-1, 1), random.uniform(-3, -1)],
+                                    "color": (random.randint(180, 255), random.randint(100, 255), 80),
+                                    "size": random.randint(3, 6),
+                                    "age": 0,
+                                    "max_age": 25,
+                                    "type": "music"
+                                })
+                        elif not active:
+                            self.piano_key_pressed[k_idx] = False
+
+                elif self._mode == "pet":
+                    self.pet_pos[0] += (index_pt[0] - self.pet_pos[0]) * 0.08
+                    self.pet_pos[1] += (index_pt[1] - self.pet_pos[1]) * 0.08
+
+                    dist_to_finger = _dist(self.pet_pos, index_pt)
+                    now = time.time()
+                    if dist_to_finger < 45:
+                        self.pet_state = "petting"
+                        if now - self.pet_last_mew > 0.35:
+                            if "purr" in self.sounds and self.sounds["purr"]:
+                                self.sounds["purr"].play()
+                            self.pet_last_mew = now
+                        if random.random() < 0.15:
+                            self.particles.append({
+                                "pos": [int(self.pet_pos[0]) + random.randint(-15, 15), int(self.pet_pos[1]) - 10],
+                                "vel": [random.uniform(-1, 1), random.uniform(-2, -0.8)],
+                                "color": (80, 80, 255),
+                                "size": random.randint(4, 7),
+                                "age": 0,
+                                "max_age": 22,
+                                "type": "heart"
+                            })
+                    else:
+                        self.pet_state = "walking"
+                        if now - self.pet_last_mew > 4.5 and random.random() < 0.02:
+                            if "mew" in self.sounds and self.sounds["mew"]:
+                                self.sounds["mew"].play()
+                            self.pet_last_mew = now
+
+            # 5. Render Flowers (only when not hand_lost)
+            for f in self.flowers:
+                if f["size"] < f["target_size"]:
+                    f["size"] += (f["target_size"] - f["size"]) * f["bloom_speed"]
+                f["rot"] += f["rot_speed"]
+                self._draw_procedural_flower(display, f)
+
+            # 6. Draw Piano keyboard keys (only when not hand_lost)
+            if self._mode == "piano" and self.piano_keys:
+                key_colors = [
+                    (50, 50, 255),   # C4 Red BGR
+                    (50, 150, 255),  # D4 Orange
+                    (50, 255, 255),  # E4 Yellow
+                    (50, 255, 50),   # F4 Green
+                    (255, 100, 50)   # G4 Blue
+                ]
+                key_names = ["C4", "D4", "E4", "F4", "G4"]
+                for i, rect in enumerate(self.piano_keys):
+                    is_active = self.piano_key_pressed[i]
+                    col = key_colors[i]
+                    if is_active:
+                        cv2.rectangle(display, (rect[0], rect[1]), (rect[2], rect[3]), col, -1)
+                        cv2.rectangle(display, (rect[0], rect[1]), (rect[2], rect[3]), (255, 255, 255), 2)
+                    else:
+                        overlay = display.copy()
+                        cv2.rectangle(overlay, (rect[0], rect[1]), (rect[2], rect[3]), col, -1)
+                        cv2.addWeighted(overlay, 0.25, display, 0.75, 0, display)
+                        cv2.rectangle(display, (rect[0], rect[1]), (rect[2], rect[3]), col, 1)
+                    
+                    cv2.putText(display, key_names[i], (rect[0] + 12, rect[1] + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # 7. Draw Virtual Pet Cat (only when not hand_lost)
+            if self._mode == "pet":
+                self._draw_hologram_cat(display)
+
+            # 8. Update and Draw Particles (only when not hand_lost)
+            dead_particles = []
+            for p in self.particles:
+                p["pos"][0] += p["vel"][0]
+                p["pos"][1] += p["vel"][1]
+                p["age"] += 1
+                if p["age"] >= p["max_age"]:
+                    dead_particles.append(p)
+                    continue
+
+                alpha = (p["max_age"] - p["age"]) / p["max_age"]
+                sz = max(1, int(p["size"] * alpha))
+                col = p["color"]
+                pt = (int(p["pos"][0]), int(p["pos"][1]))
+
+                if p.get("type") == "heart":
+                    cv2.circle(display, (pt[0]-2, pt[1]-2), sz//2, col, -1)
+                    cv2.circle(display, (pt[0]+2, pt[1]-2), sz//2, col, -1)
+                    pts = np.array([[pt[0]-sz, pt[1]], [pt[0]+sz, pt[1]], [pt[0], pt[1]+sz]], np.int32)
+                    cv2.fillPoly(display, [pts], col)
+                elif p.get("type") == "music":
+                    cv2.circle(display, pt, sz, col, -1)
+                    cv2.line(display, (pt[0]+sz//2, pt[1]), (pt[0]+sz//2, pt[1]-sz*2), col, 1)
+                    cv2.line(display, (pt[0]+sz//2, pt[1]-sz*2), (pt[0]+sz//2+sz, pt[1]-sz*2+sz//2), col, 1)
+                else:
+                    cv2.circle(display, pt, sz, col, -1)
+
+            for p in dead_particles:
+                if p in self.particles:
+                    self.particles.remove(p)
+
+            if len(self.particles) > self.MAX_PARTICLES:
+                self.particles = self.particles[-self.MAX_PARTICLES:]
+
+        # 9. HUD / Text Panel
         self._draw_hud(display, n_fingers_up, is_fist)
 
     # ── Custom Vector Graphics Renderers ──────────────────────────────────────
@@ -545,35 +543,26 @@ class ARPlayground:
         cv2.line(display, (cx + 15, cy + 6), (cx + 28, cy + 7), (255, 255, 255), 1)
 
     def _draw_hud(self, display, n_fingers, is_fist):
-        """Draw overlay dashboards and text indicators."""
+        """Draw minimal overlay dashboards and text indicators."""
         h, w = display.shape[:2]
 
-        # Top banner background
+        # Top HUD bar - thin 1px line separator instead of filled rectangle
+        cv2.line(display, (0, 50), (w, 50), GRAY_MID, 1)
+
+        # Mode text - clean, no background box
+        cv2.putText(display, f"MODE: {self._mode.upper()}", (12, 32),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, WHITE, 1, cv2.LINE_AA)
+
+        # Bottom command bar — semi-transparent dark strip
         overlay = display.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 45), (10, 10, 20), -1)
-        cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
+        cv2.rectangle(overlay, (0, h - 30), (w, h), GRAY_DARK, -1)
+        cv2.addWeighted(overlay, 0.5, display, 0.5, 0, display)
 
-        # Text
-        cv2.putText(display, "ARIA AR PLAYGROUND", (12, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 220, 255), 2)
-        
-        mode_str = f"MODE: {self._mode.upper()}"
-        col = (0, 230, 255)
-        if self._mode == "flowers": col = (255, 120, 180)
-        elif self._mode == "piano": col = (50, 255, 50)
-        elif self._mode == "pet": col = (150, 255, 100)
-        cv2.putText(display, mode_str, (w - 180, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.62, col, 2)
-
-        # Bottom Hints bar
-        cv2.rectangle(overlay, (0, h - 35), (w, h), (10, 10, 20), -1)
-        cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
-        
         hint = "Commands: 'AR wand mode' | 'AR flower mode' | 'AR piano mode' | 'AR pet mode'"
         if is_fist:
             hint = "Closed Fist: Erasing drawn particles/flowers!"
         elif n_fingers > 0:
             hint = f"Hand Active ({n_fingers} finger(s) raised) | Fist to Clear"
 
-        cv2.putText(display, hint, (10, h - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 200), 1)
+        cv2.putText(display, hint, (12, h - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, ACCENT, 1, cv2.LINE_AA)
