@@ -30,9 +30,22 @@ try:
 except ImportError:
     MEDIAPIPE_AVAILABLE = False
 
+import sys
 _SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = os.path.dirname(_SKILL_DIR)
-_MODEL_PATH = os.path.join(_PROJECT_DIR, "models", "hand_landmarker.task")
+_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'models', 'hand_landmarker.task')
+_MODEL_PATH = os.path.normpath(os.path.abspath(_MODEL_PATH))
+
+if _SKILL_DIR not in sys.path:
+    sys.path.insert(0, _SKILL_DIR)
+
+from ar_drawing import ARDrawing
+from ar_physics import ARPhysics
+from ar_face import ARFace
+from ar_pose import ARPose
+from ar_whiteboard import ARWhiteboard
+from ar_object_interact import ARObjectInteract
+from ar_3d_mode import AR3DMode, match_model
+from ar_model_generator import ModelGenerator
 
 # Minimal HUD Redesign Color Palette
 WHITE     = (255, 255, 255)
@@ -67,17 +80,45 @@ def generate_tone(frequency, duration=0.3, sample_rate=44100, volume=12000, type
 def _dist(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
+class DummyHandLandmarks:
+    def __init__(self, landmark_list):
+        self.landmark = landmark_list
+
+    def __getitem__(self, idx):
+        return self.landmark[idx]
+
+    def __len__(self):
+        return len(self.landmark)
+
+    def __iter__(self):
+        return iter(self.landmark)
+
 # ─── Main Subsystem ───────────────────────────────────────────────────────────
 class ARPlayground:
     WINDOW = "ARIA AR Playground"
     MAX_PARTICLES = 300
     MAX_FLOWERS = 20
 
-    def __init__(self, frame_provider):
+    def __init__(self, frame_provider, yolo_model=None, aria_brain=None, aria_speak=None):
         self._frame_provider = frame_provider
+        self._yolo_model = yolo_model
+        self._aria_brain = aria_brain
+        self._aria_speak = aria_speak
         self._running = False
         self._thread = None
         self._mode = "wand"  # "wand", "flowers", "piano", "pet"
+        self.w = 1280
+        self.h = 720
+
+        # Lazy loaded mode objects
+        self._drawing_obj = None
+        self._physics_obj = None
+        self._face_obj = None
+        self._pose_obj = None
+        self._whiteboard_obj = None
+        self._object_obj = None
+        self._3d_mode = None
+        self._model_gen = None
 
         # MediaPipe Landmarks (updated in async callback)
         self._latest_lm = None
@@ -98,6 +139,50 @@ class ARPlayground:
         # Keyboard press tracker for piano
         self.piano_key_pressed = [False] * 5
         self.piano_keys = []
+
+    @property
+    def mode_drawing(self):
+        if self._drawing_obj is None:
+            self._drawing_obj = ARDrawing(self.w, self.h)
+        return self._drawing_obj
+
+    @property
+    def mode_physics(self):
+        if self._physics_obj is None:
+            self._physics_obj = ARPhysics(self.w, self.h)
+        return self._physics_obj
+
+    @property
+    def mode_face(self):
+        if self._face_obj is None:
+            self._face_obj = ARFace(self.w, self.h)
+        return self._face_obj
+
+    @property
+    def mode_pose(self):
+        if self._pose_obj is None:
+            self._pose_obj = ARPose(self.w, self.h)
+        return self._pose_obj
+
+    @property
+    def mode_whiteboard(self):
+        if self._whiteboard_obj is None:
+            self._whiteboard_obj = ARWhiteboard(self.w, self.h)
+        return self._whiteboard_obj
+
+    @property
+    def mode_object(self):
+        if self._object_obj is None:
+            self._object_obj = ARObjectInteract(self.w, self.h, yolo_model=self._yolo_model, aria_brain=self._aria_brain)
+        return self._object_obj
+
+    @property
+    def mode_ar3d(self):
+        if self._3d_mode is None:
+            self._3d_mode = AR3DMode(aria_brain=self._aria_brain)
+            self._model_gen = ModelGenerator()
+            self._3d_mode._model_gen = self._model_gen
+        return self._3d_mode
 
     def _init_sounds(self):
         """Pre-synthesize piano notes and cat sounds."""
@@ -121,6 +206,12 @@ class ARPlayground:
     def set_mode(self, mode):
         """Set the current AR mode cleanly."""
         mode = mode.lower().strip()
+
+        # Stop 3D mode if we are switching away from it
+        if self._mode == "ar3d" and mode not in ["ar3d", "3d", "hologram"]:
+            if self._3d_mode:
+                self._3d_mode.stop()
+
         if mode in ["wand", "magic", "trail"]:
             self._mode = "wand"
         elif mode in ["flowers", "garden", "flower"]:
@@ -129,8 +220,104 @@ class ARPlayground:
             self._mode = "piano"
         elif mode in ["pet", "cat"]:
             self._mode = "pet"
+        elif mode in ["drawing", "canvas"]:
+            self._mode = "drawing"
+        elif mode in ["physics", "balls"]:
+            self._mode = "physics"
+        elif mode in ["face", "mask", "face_ar"]:
+            self._mode = "face"
+        elif mode in ["pose", "body"]:
+            self._mode = "pose"
+        elif mode in ["whiteboard", "write"]:
+            self._mode = "whiteboard"
+        elif mode in ["object", "interact"]:
+            self._mode = "object"
+        elif mode in ["ar3d", "3d", "hologram"]:
+            self._mode = "ar3d"
         print(f"[ARPlayground] Switched mode to: {self._mode.upper()}")
         self.clear_canvas()
+
+        if self._mode == "ar3d":
+            try:
+                cv2.destroyWindow(self.WINDOW)
+            except Exception:
+                pass
+            self.mode_ar3d.start()
+            self.mode_ar3d.load_model("crystal")
+            if not getattr(self, "_announcer_started", False):
+                self._announcer_started = True
+                threading.Thread(target=self._progress_announcer, daemon=True).start()
+
+    def _on_model_ready(self, prompt, path):
+        print(f"[AR3D] Model ready: {prompt}")
+        if self._3d_mode:
+            self._3d_mode.load_model(prompt)
+        if self._aria_speak:
+            self._aria_speak(f"Your {prompt} model is ready. Loading now.")
+
+    def _progress_announcer(self):
+        """Speaks progress at key milestones."""
+        announced = set()
+        while self._running:
+            if self._model_gen and self._model_gen._generating:
+                p = self._model_gen.progress
+                if p >= 25 and 25 not in announced:
+                    announced.add(25)
+                    if self._aria_speak:
+                        self._aria_speak("25 percent done.")
+                elif p >= 50 and 50 not in announced:
+                    announced.add(50)
+                    if self._aria_speak:
+                        self._aria_speak("Halfway there.")
+                elif p >= 75 and 75 not in announced:
+                    announced.add(75)
+                    if self._aria_speak:
+                        self._aria_speak("Almost ready.")
+                elif p >= 100 and 100 not in announced:
+                    announced.add(100)
+                    announced.clear()
+            else:
+                announced.clear()
+            time.sleep(2)
+
+    def handle_subcommand(self, cmd_name):
+        cmd_name = cmd_name.lower().strip()
+        if self._mode == "ar3d" and self._3d_mode:
+            key = match_model(cmd_name)
+            if key:
+                dest_path = os.path.join(_SKILL_DIR, "assets", "3d", f"{key}.obj")
+                if not os.path.exists(dest_path) or os.path.getsize(dest_path) <= 50000:
+                    def generate_in_bg():
+                        print(f"[ARPlayground] Generating 3D model for '{key}' in background...")
+                        self._model_gen.generate(key)
+                        self._on_model_ready(key, dest_path)
+                    threading.Thread(target=generate_in_bg, daemon=True).start()
+                    return f"Generating 3D model for {key} in background. Please wait."
+                else:
+                    self._3d_mode.load_model(key)
+                    return f"Loading {key} model."
+            else:
+                return self._3d_mode.voice_command(cmd_name)
+
+        if cmd_name == "clear_board":
+            if self._whiteboard_obj:
+                self._whiteboard_obj.clear_board()
+            if self._drawing_obj:
+                self._drawing_obj.clear()
+        elif cmd_name == "undo":
+            if self._whiteboard_obj:
+                self._whiteboard_obj.undo()
+            if self._drawing_obj:
+                self._drawing_obj.undo()
+        elif cmd_name == "next_mask":
+            if self._face_obj:
+                self._face_obj.next_mask()
+        elif cmd_name == "prev_mask":
+            if self._face_obj:
+                self._face_obj.prev_mask()
+        elif cmd_name == "remember_current":
+            if self._object_obj:
+                self._object_obj.remember_current()
 
     def clear_canvas(self):
         """Clear all active drawn shapes and particles."""
@@ -155,19 +342,27 @@ class ARPlayground:
 
     def stop(self):
         self._running = False
+        self._announcer_started = False
+        if self._3d_mode:
+            self._3d_mode.stop()
+            self._3d_mode = None
         print("[ARPlayground] Subsystem stopped.")
 
     def _on_result(self, result, _output_image, _timestamp_ms):
         lm = result.hand_landmarks[0] if result.hand_landmarks else None
+        lm_list = result.hand_landmarks if result.hand_landmarks else []
         with self._lm_lock:
             self._latest_lm = lm
+            self._latest_lm_list = lm_list
 
     def _loop(self):
-        base_opts = _mp_python.BaseOptions(model_asset_path=_MODEL_PATH)
+        with open(_MODEL_PATH, "rb") as f:
+            model_data = f.read()
+        base_opts = _mp_python.BaseOptions(model_asset_buffer=model_data)
         options = _mp_vision.HandLandmarkerOptions(
             base_options=base_opts,
             running_mode=_mp_vision.RunningMode.LIVE_STREAM,
-            num_hands=1,
+            num_hands=2,
             min_hand_detection_confidence=0.65,
             min_hand_presence_confidence=0.55,
             min_tracking_confidence=0.55,
@@ -219,6 +414,7 @@ class ARPlayground:
 
                 with self._lm_lock:
                     lm = self._latest_lm
+                    lm_list = getattr(self, '_latest_lm_list', [])
 
                 # ── Hand Detection Timeout ──
                 if lm is None:
@@ -226,14 +422,26 @@ class ARPlayground:
                 else:
                     hand_lost_frames = 0
 
+                # Wrap raw lists for compatibility with modular solution-based components
+                wrapped_lm = DummyHandLandmarks(lm) if lm is not None else None
+                wrapped_lm_list = [DummyHandLandmarks(hand) for hand in lm_list] if lm_list else []
+
                 # Render & update effects
                 display = flipped.copy()
-                self._update_and_draw(display, lm, w, h, hand_lost_frames > 15)
+                self._update_and_draw(display, wrapped_lm, w, h, hand_lost_frames > 15, wrapped_lm_list)
 
-                cv2.imshow(self.WINDOW, display)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q') or key == 27:
-                    break
+                if self._mode == "ar3d":
+                    cv2.waitKey(1)
+                    # Actively destroy the window every frame to keep it hidden
+                    try:
+                        cv2.destroyWindow(self.WINDOW)
+                    except:
+                        pass
+                else:
+                    cv2.imshow(self.WINDOW, display)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q') or key == 27:
+                        break
 
                 elapsed = time.time() - t0
                 sleep = (1.0 / 30) - elapsed
@@ -251,7 +459,31 @@ class ARPlayground:
             pass
 
     # ── Update & Draw Main Routine ────────────────────────────────────────────
-    def _update_and_draw(self, display, lm, w, h, hand_lost):
+    def _update_and_draw(self, display, lm, w, h, hand_lost, lm_list=None):
+        if lm_list is None:
+            lm_list = []
+
+        if self._mode in ["drawing", "physics", "face", "pose", "whiteboard", "object", "ar3d"]:
+            if self._mode == "drawing":
+                annotated = self.mode_drawing.process(display, lm)
+            elif self._mode == "physics":
+                annotated = self.mode_physics.process(display, lm, lm_list)
+            elif self._mode == "face":
+                annotated = self.mode_face.process(display)
+            elif self._mode == "pose":
+                annotated = self.mode_pose.process(display)
+            elif self._mode == "whiteboard":
+                annotated = self.mode_whiteboard.process(display, lm)
+            elif self._mode == "object":
+                annotated = self.mode_object.process(display, lm)
+            elif self._mode == "ar3d":
+                if self._3d_mode:
+                    hand_obj = lm[0] if isinstance(lm, list) else lm
+                    self._3d_mode.update_hand(hand_obj, w, h)
+                annotated = display
+            display[:] = annotated
+            return
+
         # 1. Corner brackets (using LINE_AA for anti-aliasing)
         bracket_len = 20
         cv2.line(display, (0, 0), (bracket_len, 0), WHITE, 1, cv2.LINE_AA)
@@ -496,3 +728,32 @@ class ARPlayground:
 
         cv2.putText(display, hint, (12, h - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, ACCENT, 1, cv2.LINE_AA)
+
+def _draw_3d_hud_overlay(frame, lm, w, h):
+    """Draw minimal hand tracking overlay when AR 3D mode is active."""
+    from ar_drawing import _draw_corner_brackets, _draw_bottom_bar
+    import cv2
+
+    # Draw hand skeleton lightly
+    connections = [
+        (0,1),(1,2),(2,3),(3,4),
+        (0,5),(5,6),(6,7),(7,8),
+        (0,9),(9,10),(10,11),(11,12),
+        (0,13),(13,14),(14,15),(15,16),
+        (0,17),(17,18),(18,19),(19,20),
+        (5,9),(9,13),(13,17),
+    ]
+    pts = [(int(lm.landmark[i].x * w), int(lm.landmark[i].y * h))
+           for i in range(21)]
+    for a, b in connections:
+        cv2.line(frame, pts[a], pts[b], (100, 180, 255), 1, cv2.LINE_AA)
+    for pt in pts:
+        cv2.circle(frame, pt, 3, (200, 220, 255), -1, cv2.LINE_AA)
+
+    # Top HUD
+    cv2.line(frame, (0, 48), (w, 48), (180, 180, 180), 1)
+    cv2.putText(frame, "MODE: AR 3D HOLOGRAM", (12, 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    _draw_corner_brackets(frame)
+    _draw_bottom_bar(frame,
+        "Pinch=Rotate | Two-finger=Zoom | Fist=Explode | OpenPalm=Reset")

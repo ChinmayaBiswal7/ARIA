@@ -47,6 +47,24 @@ class TestARPlayground(unittest.TestCase):
         ap.set_mode("magic")
         self.assertEqual(ap._mode, "wand")
 
+        ap.set_mode("drawing")
+        self.assertEqual(ap._mode, "drawing")
+
+        ap.set_mode("physics")
+        self.assertEqual(ap._mode, "physics")
+
+        ap.set_mode("face")
+        self.assertEqual(ap._mode, "face")
+
+        ap.set_mode("pose")
+        self.assertEqual(ap._mode, "pose")
+
+        ap.set_mode("whiteboard")
+        self.assertEqual(ap._mode, "whiteboard")
+
+        ap.set_mode("object")
+        self.assertEqual(ap._mode, "object")
+
     def test_canvas_clearing(self):
         """Verify clear_canvas erases particles and flowers."""
         ap = ARPlayground(frame_provider=lambda: None)
@@ -60,7 +78,7 @@ class TestARPlayground(unittest.TestCase):
         self.assertEqual(len(ap.particles), 0)
         self.assertEqual(len(ap.flowers), 0)
 
-    @patch("mediapipe.tasks.python.vision.HandLandmarker.create_from_options")
+    @patch("skills.ar_playground._mp_vision.HandLandmarker.create_from_options")
     def test_start_stop(self, mock_create):
         """Verify start and stop thread states."""
         ap = ARPlayground(frame_provider=lambda: None)
@@ -81,5 +99,32 @@ class TestARPlayground(unittest.TestCase):
                     ap.stop()
                     self.assertFalse(ap._running)
 
+    def test_modes_processing_with_landmarks(self):
+        """Verify all AR modes process dummy hand landmarks without raising exceptions."""
+        from skills.ar_playground import DummyHandLandmarks
+        import numpy as np
+
+        class MockLandmark:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+        # Create 21 mock landmarks
+        mock_raw_lm = [MockLandmark(0.5, 0.5) for _ in range(21)]
+        wrapped_lm = DummyHandLandmarks(mock_raw_lm)
+        wrapped_lm_list = [wrapped_lm]
+
+        ap = ARPlayground(frame_provider=lambda: None)
+        dummy_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        # Iterate through all modes and invoke _update_and_draw to ensure no crash occurs
+        for mode in ["wand", "flowers", "piano", "pet", "drawing", "physics", "face", "pose", "whiteboard", "object", "ar3d"]:
+            ap.set_mode(mode)
+            try:
+                ap._update_and_draw(dummy_frame, wrapped_lm, 1280, 720, False, wrapped_lm_list)
+            except Exception as e:
+                self.fail(f"Mode '{mode}' failed processing with landmarks: {e}")
+
 if __name__ == "__main__":
     unittest.main()
+

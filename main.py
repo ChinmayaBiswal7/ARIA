@@ -11,6 +11,10 @@ Usage:
 
 import os
 import sys
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 import time
 import threading
 import re
@@ -148,6 +152,11 @@ class ARIA:
         self.startup_greeting_done = False
         self._greeted_users = set()
         self._last_greeted_face = None
+
+        self.pending_speech = []
+        self.last_user_speech_time = 0.0
+        self._proactive_history = set()
+        self._proactive_cooldown = {}
 
         self.automation_mode = False
         self.last_automation_action_time = 0.0
@@ -388,8 +397,38 @@ class ARIA:
     def reset_interaction_timeout(self):
         """Update last interaction time when voice VAD or speech starts."""
         self.last_interaction_time = time.time()
+        self.last_user_speech_time = time.time()
         if hasattr(self, "conversation_session"):
             self.conversation_session.touch(wake_reason="speech_activity")
+
+    def is_user_speaking(self):
+        now = time.time()
+        recording = self.voice and getattr(self.voice, 'recording_active', False)
+        user_speaking = self.voice and getattr(self.voice, 'vad_detecting_speech', False)
+        recent_speech = (now - getattr(self, "last_user_speech_time", 0.0)) < 3.0
+        return bool(recording or user_speaking or recent_speech)
+
+    def safe_speak(self, text):
+        if self.is_user_speaking():
+            print(f"[ARIA] User is speaking. Queuing proactive speech: '{text}'")
+            if not hasattr(self, "pending_speech"):
+                self.pending_speech = []
+            self.pending_speech.append(text)
+        else:
+            self._speak(text)
+
+    def deliver_proactive(self, msg):
+        if not msg:
+            return
+        if msg in self._proactive_history:
+            return
+        key = msg[:30]
+        last_time = self._proactive_cooldown.get(key, 0)
+        if time.time() - last_time < 1800:  # 30 minutes
+            return
+        self._proactive_history.add(msg)
+        self._proactive_cooldown[key] = time.time()
+        self.safe_speak(msg)
 
     def _mark_conversation_activity(self, wake_reason="interaction", active_task_id=None):
         """Refresh the active conversation window after user or ARIA activity."""
@@ -397,8 +436,30 @@ class ARIA:
         if hasattr(self, "conversation_session"):
             self.conversation_session.touch(wake_reason=wake_reason, active_task_id=active_task_id)
 
+    def _is_aria_busy(self):
+        """Returns True if any background subsystem is actively running."""
+        # Check AR playground is running
+        if getattr(self, 'ar_playground', None) is not None and self.ar_playground._running:
+            return True
+        # Check 3D model is currently generating
+        if getattr(self, 'ar_playground', None) is not None:
+            ar = self.ar_playground
+            if getattr(ar, '_model_gen', None) is not None:
+                if getattr(ar._model_gen, '_generating', False):
+                    return True
+        # Check vision learner running
+        if getattr(self, 'vision_learner', None) is not None and getattr(self.vision_learner, 'running', False):
+            return True
+        # Check gesture control running
+        if getattr(self, 'gesture_mode', False):
+            return True
+        return False
+
     def _has_active_conversation_task(self):
         """True when an active task should keep ARIA in light conversational idle."""
+        if self._is_aria_busy():
+            self.conversation_session.touch(wake_reason="background_subsystem")
+            return True
         try:
             if self.brain and self.brain.semantic_router:
                 active = self.brain.semantic_router.task_manager.get_active_task()
@@ -652,7 +713,7 @@ class ARIA:
                         
                         if action == "execute":
                             set_state("SPEAKING")
-                            self._speak(suggestion)
+                            self.deliver_proactive(suggestion)
                             set_state("IDLE")
                             self.last_proactive_suggestion_time = time.time()
                         else:
@@ -1140,9 +1201,19 @@ class ARIA:
         # Mostly stressed lately
         if recent.count("stressed") >= 3:
             if hasattr(self, "proactive_queue") and self.proactive_queue is not None:
-                self.proactive_queue.put(
-                    "I've noticed you seem quite stressed lately. Is everything okay?"
-                )
+                import random
+                STRESS_RESPONSES = [
+                    "You seem a bit stressed. Want to take a break?",
+                    "Everything alright? You've seemed tense lately.",
+                    "Hey, noticed you seem stressed. I'm here if you need anything.",
+                    "I've noticed you seem quite stressed lately. Is everything okay?",
+                    None,
+                    None,
+                    None,
+                ]
+                response = random.choice(STRESS_RESPONSES)
+                if response:
+                    self.proactive_queue.put(response)
         
         # Mostly tired
         if recent.count("tired") >= 3:
@@ -2805,10 +2876,30 @@ Rules:
                 self._spoken_during_turn = None
                 self._reply_context.phone_only = previous_phone_only
 
+    def _check_and_release_camera(self):
+        """Releases the camera if no camera-dependent modes are active."""
+        ar_active = getattr(self, "ar_mode", False) or getattr(self, "ar_playground", None) is not None
+        gesture_active = getattr(self, "gesture_mode", False)
+        vision_active = getattr(self, "vision_learner", None) and self.vision_learner.running
+        
+        if not ar_active and not gesture_active and not vision_active:
+            if self.camera:
+                print("[Camera] No active camera consumer. Releasing camera to turn it off.")
+                self.camera.release()
+
     def _handle_input_impl(self, user_input, image=None):
         """Process one utterance from the user."""
         self._mark_conversation_activity(wake_reason="user_input")
+        
+        # Get normalized query for trigger checking and command processing
         inp = user_input.strip().lower()
+        if hasattr(self, 'brain') and self.brain and getattr(self.brain, 'semantic_router', None) and self.brain.semantic_router.normalizer:
+            try:
+                normalized_val, _ = self.brain.semantic_router.normalizer.normalize(user_input)
+                # Strip terminal punctuation for trigger matching ease
+                inp = normalized_val.strip().lower().rstrip('.!?')
+            except Exception as norm_err:
+                print(f"[Main] Query normalization failed: {norm_err}")
 
         # ── Detect face emotion before responding ──
         emotional_tone = "neutral"
@@ -4237,6 +4328,49 @@ Rules:
             self._speak(result)
             return
 
+        # ─ Stop/Disable Camera and AR Playground Triggers (Checked First to prevent collision) ─
+        if any(x in inp for x in [
+            "disable ar playground", "ar playground off", "stop ar mode", "ar mode off",
+            "stop ar playground", "disable ar mode",
+            "disable air playground", "air playground off", "stop air mode", "air mode off",
+            "stop air playground", "disable air mode",
+            "stop ar object", "disable ar object", "stop ar whiteboard", "disable ar whiteboard",
+            "stop ar face", "disable ar face", "stop ar drawing", "disable ar drawing",
+            "stop ar physics", "disable ar physics", "stop ar pose", "disable ar pose",
+            "stop ar pet", "disable ar pet", "stop ar flower", "disable ar flower",
+            "stop ar piano", "disable ar piano", "stop ar wand", "disable ar wand",
+            "close camera", "stop camera", "turn off camera", "hide camera", "camera off",
+            "disable object mode", "stop object mode", "close object mode", "object mode off",
+            "disable face mode", "stop face mode", "close face mode", "face mode off",
+            "disable person mode", "stop person mode", "close person mode", "person mode off",
+            "close the object one", "disable the object one", "stop the object one",
+            "disable ar", "stop ar", "close ar"
+        ]):
+            try:
+                stopped_something = False
+                if getattr(self, "ar_mode", False) or getattr(self, "ar_playground", None) is not None:
+                    if self.ar_playground:
+                        self.ar_playground.stop()
+                        self.ar_playground = None
+                    self.ar_mode = False
+                    self._speak("AR Playground stopped.")
+                    stopped_something = True
+                
+                if hasattr(self, "vision_learner") and self.vision_learner.running:
+                    self.vision_learner.stop_camera()
+                    self._speak("Camera closed.")
+                    stopped_something = True
+                
+                if not stopped_something:
+                    self._speak("Camera and AR mode are already off.")
+                
+                self._check_and_release_camera()
+            except Exception as e:
+                print(f"[Camera/AR] Failed to stop: {e}")
+                self._speak("Could not stop camera or AR mode.")
+            return
+
+
         # ─ Camera Controls ─
         # ─ MODE SWITCHING: Face mode vs Object Mode ─
         _face_id_triggers = [
@@ -4245,7 +4379,7 @@ Rules:
             "who's around", "who around", "who is near", "who is near me", "who is near you",
             "who is in the space", "anyone around", "anyone in the room"
         ]
-        if image is None and any(x in inp for x in ["face mode", "person mode", "recognize me", "show me myself"] + _face_id_triggers):
+        if image is None and any(x in inp for x in ["face mode", "person mode", "recognize me", "show me myself"] + _face_id_triggers) and not any(ar in inp for ar in ["ar ", "air "]):
             self.vision_learner.mode = "face"
             if not self.vision_learner.running:
                 if getattr(self, "airtouch_mode", False):
@@ -4285,7 +4419,7 @@ Rules:
             self._speak("Switching to Person Mode. I will now help you recognize faces.")
             return
 
-        if any(x in inp for x in ["object mode", "thing mode", "identify objects", "show objects"]):
+        if any(x in inp for x in ["object mode", "thing mode", "identify objects", "show objects"]) and not any(ar in inp for ar in ["ar ", "air "]):
             self.vision_learner.mode = "object"
             if not self.vision_learner.running:
                 if getattr(self, "airtouch_mode", False):
@@ -4330,10 +4464,6 @@ Rules:
                 self._speak("I had trouble opening the camera. Is your webcam connected?")
             return
 
-        if any(x in inp for x in ["close camera", "stop camera", "turn off camera", "hide camera", "camera off"]):
-            self.vision_learner.stop_camera()
-            self._speak("Camera closed.")
-            return
 
         if any(x in inp for x in ["what do you know", "list objects", "what have you learned", "what objects do you know"]):
             list_msg = self.vision_learner.list_learned()
@@ -4383,6 +4513,7 @@ Rules:
                 msg = stop_gesture_control()
                 self.gesture_mode = False
                 self._speak(msg)
+                self._check_and_release_camera()
             except Exception as e:
                 print(f"[GestureControl] Failed to stop: {e}")
                 self._speak("Could not stop gesture control.")
@@ -4414,17 +4545,100 @@ Rules:
                 self._speak("Sorry, I could not start gesture control.")
             return
 
+        # ─ Route sub-commands to AR Playground if it's currently running ─
+        if getattr(self, 'ar_mode', False) and getattr(self, 'ar_playground', None):
+            if any(x in inp for x in ["clear board", "clear canvas", "clear whiteboard"]):
+                self.ar_playground.handle_subcommand("clear_board")
+                self._speak("Board cleared.")
+                return
+            elif "undo" in inp:
+                self.ar_playground.handle_subcommand("undo")
+                self._speak("Undone.")
+                return
+            elif any(x in inp for x in ["next mask", "change mask"]):
+                self.ar_playground.handle_subcommand("next_mask")
+                self._speak("Swapping to next mask.")
+                return
+            elif any(x in inp for x in ["previous mask", "prev mask"]):
+                self.ar_playground.handle_subcommand("prev_mask")
+                self._speak("Swapping to previous mask.")
+                return
+            elif any(x in inp for x in ["remember this", "save this"]):
+                self.ar_playground.handle_subcommand("remember_current")
+                self._speak("Remembering current object.")
+                return
+            elif any(p in inp for p in ["create a", "create an", "generate a", "show me a", "load a", "make a"]):
+                res = self.ar_playground.handle_subcommand(inp)
+                if res:
+                    self._speak(res)
+                return
+            elif any(p in inp for p in ["is the model ready", "is the 3d model ready", "model ready"]):
+                is_gen = False
+                if hasattr(self.ar_playground, '_model_gen') and self.ar_playground._model_gen:
+                    is_gen = self.ar_playground._model_gen._generating
+                if is_gen:
+                    self._speak("Still generating, I will notify you automatically when done.")
+                else:
+                    self._speak("The model is ready.")
+                return
+            elif any(p in inp for p in [
+                "rotate left", "rotate right", "rotate up", "rotate down",
+                "make it bigger", "make it smaller", "zoom in", "zoom out",
+                "reset view", "show wireframe", "explode model", "explode it",
+                "change color", "change colour"
+            ]):
+                res = self.ar_playground.handle_subcommand(inp)
+                if res:
+                    self._speak(res)
+                return
+
         # ─ AR Playground Mode selection & auto-start ─
-        if any(x in inp for x in [
-            "ar wand mode", "ar magic mode", "ar trail mode",
-            "ar flower mode", "ar garden mode",
-            "ar piano mode", "ar synth mode",
-            "ar pet mode", "ar cat mode",
-            "air wand mode", "air magic mode", "air trail mode",
-            "air flower mode", "air garden mode",
-            "air piano mode", "air synth mode",
-            "air pet mode", "air cat mode"
-        ]):
+        # List of explicit AR triggers to start the playground and switch mode
+        ar_triggers = {
+            "wand": ["ar wand", "ar magic", "ar trail", "air wand", "air magic", "air trail"],
+            "flowers": ["ar flower", "ar garden", "air flower", "air garden"],
+            "piano": ["ar piano", "ar synth", "ar music", "air piano", "air synth", "air music"],
+            "pet": ["ar pet", "ar cat", "air pet", "air cat"],
+            "drawing": ["ar drawing", "ar canvas", "air drawing", "air canvas"],
+            "physics": ["ar physics", "ar ball", "air physics", "air ball"],
+            "face": ["ar face", "ar mask", "air face", "air mask"],
+            "pose": ["ar pose", "ar body", "air pose", "air body"],
+            "whiteboard": ["ar whiteboard", "ar write", "air whiteboard", "air write"],
+            "object": ["ar object", "ar interact", "air object", "air interact"],
+            "ar3d": ["ar 3d mode", "enable ar 3d", "3d mode on", "ar hologram mode", "hologram mode", "ar 3d", "air 3d", "enable air 3d"]
+        }
+
+        # If already running, we also support switching modes using simpler "mode" terms without "ar"/"air" prefixes
+        if getattr(self, 'ar_mode', False) and getattr(self, 'ar_playground', None):
+            active_only_triggers = {
+                "wand": ["wand mode", "magic mode", "trail mode"],
+                "flowers": ["flower mode", "garden mode"],
+                "piano": ["piano mode", "synth mode", "music mode"],
+                "pet": ["pet mode", "cat mode"],
+                "drawing": ["drawing mode", "canvas mode"],
+                "physics": ["physics mode", "balls mode", "ball mode"],
+                "face": ["face mode", "mask mode"],
+                "pose": ["pose mode", "body mode"],
+                "whiteboard": ["whiteboard mode", "write mode"],
+                "object": ["object mode", "interact mode"],
+                "ar3d": ["3d mode", "hologram mode"]
+            }
+        else:
+            active_only_triggers = {}
+
+        # Combine triggers to see if any matches
+        matched_mode = None
+        for mode, triggers in ar_triggers.items():
+            if any(t in inp for t in triggers):
+                matched_mode = mode
+                break
+        if not matched_mode:
+            for mode, triggers in active_only_triggers.items():
+                if any(t in inp for t in triggers):
+                    matched_mode = mode
+                    break
+
+        if matched_mode:
             try:
                 if self.gesture_mode:
                     from skills.gesture_control import stop_gesture_control
@@ -4444,44 +4658,37 @@ Rules:
                 
                 from skills.ar_playground import ARPlayground
                 if not self.ar_playground:
-                    self.ar_playground = ARPlayground(frame_provider=self.camera.capture_frame_raw)
+                    yolo_model = getattr(self.vision_learner, 'yolo', None)
+                    self.ar_playground = ARPlayground(
+                        frame_provider=self.camera.capture_frame_raw,
+                        yolo_model=yolo_model,
+                        aria_brain=self.brain,
+                        aria_speak=self._speak
+                    )
                 self.ar_playground.start()
                 self.ar_mode = True
 
-                if any(x in inp for x in ["ar wand mode", "ar magic mode", "ar trail mode", "air wand mode", "air magic mode", "air trail mode"]):
-                    self.ar_playground.set_mode("wand")
-                    self._speak("Magic Wand mode active.")
-                elif any(x in inp for x in ["ar flower mode", "ar garden mode", "air flower mode", "air garden mode"]):
-                    self.ar_playground.set_mode("flowers")
-                    self._speak("Flower Garden mode active.")
-                elif any(x in inp for x in ["ar piano mode", "ar synth mode", "air piano mode", "air synth mode"]):
-                    self.ar_playground.set_mode("piano")
-                    self._speak("Air Piano mode active.")
-                elif any(x in inp for x in ["ar pet mode", "ar cat mode", "air pet mode", "air cat mode"]):
-                    self.ar_playground.set_mode("pet")
-                    self._speak("Virtual Pet mode active.")
+                self.ar_playground.set_mode(matched_mode)
+                
+                mode_speak_names = {
+                    "wand": "Magic Wand mode active.",
+                    "flowers": "Flower Garden mode active.",
+                    "piano": "Air Piano mode active.",
+                    "pet": "Virtual Pet mode active.",
+                    "drawing": "AR Drawing Canvas mode active.",
+                    "physics": "Hand Physics mode active.",
+                    "face": "Face AR Overlays active.",
+                    "pose": "Pose Detection active.",
+                    "whiteboard": "AR Whiteboard active.",
+                    "object": "Object Interaction active.",
+                    "ar3d": "AR 3D Hologram mode active. Say 'create a dragon' to start."
+                }
+                self._speak(mode_speak_names[matched_mode])
             except Exception as e:
                 print(f"[ARPlayground] Mode set failed: {e}")
                 self._speak("Failed to configure AR mode.")
             return
 
-        # ─ AR Playground ON/OFF Toggle ─
-        if any(x in inp for x in [
-            "disable ar playground", "ar playground off", "stop ar mode", "ar mode off",
-            "stop ar playground", "disable ar mode",
-            "disable air playground", "air playground off", "stop air mode", "air mode off",
-            "stop air playground", "disable air mode"
-        ]):
-            try:
-                if self.ar_playground:
-                    self.ar_playground.stop()
-                    self.ar_playground = None
-                self.ar_mode = False
-                self._speak("AR Playground stopped.")
-            except Exception as e:
-                print(f"[ARPlayground] Failed to stop: {e}")
-                self._speak("Could not stop AR Playground.")
-            return
 
         if any(x in inp for x in [
             "enable ar playground", "ar playground on", "start ar mode", "ar mode on",
@@ -4511,7 +4718,13 @@ Rules:
                     self._speak("AR Playground is unavailable. MediaPipe is not installed.")
                     return
                 if not self.ar_playground:
-                    self.ar_playground = ARPlayground(frame_provider=self.camera.capture_frame_raw)
+                    yolo_model = getattr(self.vision_learner, 'yolo', None)
+                    self.ar_playground = ARPlayground(
+                        frame_provider=self.camera.capture_frame_raw,
+                        yolo_model=yolo_model,
+                        aria_brain=self.brain,
+                        aria_speak=self._speak
+                    )
                 success = self.ar_playground.start()
                 if success:
                     self.ar_mode = True
@@ -4765,7 +4978,7 @@ Rules:
                 batt = self.context_skill.get_battery_percent()
                 charging = self.context_skill.get_charging_status()
                 if batt is not None and batt < 20 and not charging:
-                    self._speak(f"Excuse me. Your laptop battery is low at {batt} percent. Please connect your charger.")
+                    self.safe_speak(f"Excuse me. Your laptop battery is low at {batt} percent. Please connect your charger.")
             except Exception as e:
                 print(f"[Proactive] Battery check error: {e}")
                 
@@ -4774,7 +4987,7 @@ Rules:
             self.last_break_check = now
             elapsed_hours = int((now - self.start_time) / 3600)
             if elapsed_hours >= 1:
-                self._speak(f"Hi. You have been working for {elapsed_hours} hour. Remember to take a quick break.")
+                self.safe_speak(f"Hi. You have been working for {elapsed_hours} hour. Remember to take a quick break.")
 
         if now - self.last_activity_log > 300:
             self.last_activity_log = now
@@ -4791,7 +5004,7 @@ Rules:
             try:
                 due = self.memory_skill.get_due_reminders()
                 for reminder_id, task in due:
-                    self._speak(f"Reminder: {task}")
+                    self.safe_speak(f"Reminder: {task}")
                     self.memory_skill.complete_reminder(reminder_id)
             except Exception as e:
                 print(f"[Proactive] Reminder check error: {e}")
@@ -4933,6 +5146,17 @@ Rules:
 
         while self.running:
             try:
+                # Reset AR playground state if it has stopped
+                if self.ar_playground and not self.ar_playground._running:
+                    print("[ARIA] AR Playground has stopped. Resetting state flags.")
+                    self.ar_playground = None
+                    self.ar_mode = False
+
+                # Deliver any pending proactive speech if user is not speaking
+                if hasattr(self, "pending_speech") and self.pending_speech and not self.is_user_speaking():
+                    msg = self.pending_speech.pop(0)
+                    self._speak(msg)
+
                 # Execute background proactive tasks (guarded — must not crash the loop)
                 try:
                     self._run_proactive_checks()
@@ -5081,6 +5305,20 @@ sys.excepthook = _global_exception_handler
 import signal
 
 def main():
+    # ─── Venv Auto-Restart Guard ───
+    import sys
+    import subprocess
+    import os
+    
+    is_in_venv = 'aria_env' in sys.executable or (sys.prefix != sys.base_prefix)
+    if not is_in_venv:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        venv_python = os.path.join(script_dir, 'aria_env', 'Scripts', 'python.exe')
+        if os.path.exists(venv_python):
+            print(f"[ARIA Venv Guard] Running on system Python. Auto-restarting inside virtual environment: {venv_python}")
+            result = subprocess.run([venv_python] + sys.argv)
+            sys.exit(result.returncode)
+
     aria_instance = None
     qt_app = None
     qt_window = None

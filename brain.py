@@ -9,6 +9,10 @@ import os
 import json
 import datetime
 import socket
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # ── Semantic Intent Router (NEW) ──────────────────────────────────────────────
 try:

@@ -18,6 +18,8 @@ class Voice:
         self._init_tts()
         self._cleanup_temp_files()
         self._is_speaking_lock = False
+        self.recording_active = False
+        self.vad_detecting_speech = False
         self.stt_language = 'en'  # Force English by default to prevent transcription hallucinations
         self.on_speech_detected = None
 
@@ -469,6 +471,9 @@ class Voice:
         import time as pytime
         import numpy as np
 
+        self.recording_active = True
+        self.vad_detecting_speech = False
+
         sample_rate = source.SAMPLE_RATE
         sample_width = source.SAMPLE_WIDTH
 
@@ -483,44 +488,49 @@ class Voice:
         speech_start_time = None
         silence_start_time = None
 
-        while True:
-            if self.is_speaking:
-                print("[Voice/ChunkedRecord] Aborted recording because ARIA started speaking.")
-                return None
-
-            now = pytime.time()
-            if not started_speech:
-                if timeout and (now - t_start) > timeout:
+        try:
+            while True:
+                if self.is_speaking:
+                    print("[Voice/ChunkedRecord] Aborted recording because ARIA started speaking.")
                     return None
-            else:
-                if phrase_time_limit and (now - speech_start_time) > phrase_time_limit:
-                    break
 
-            try:
-                raw_bytes = source.stream.read(chunk_samples)
-                if not raw_bytes:
+                now = pytime.time()
+                if not started_speech:
+                    if timeout and (now - t_start) > timeout:
+                        return None
+                else:
+                    if phrase_time_limit and (now - speech_start_time) > phrase_time_limit:
+                        break
+
+                try:
+                    raw_bytes = source.stream.read(chunk_samples)
+                    if not raw_bytes:
+                        pytime.sleep(0.01)
+                        continue
+
+                    frames.append(raw_bytes)
+
+                    # Check energy level to detect start of speech / silence
+                    audio_np = np.frombuffer(raw_bytes, dtype=np.int16)
+                    if len(audio_np) > 0:
+                        rms = np.sqrt(np.mean(audio_np.astype(np.float32) ** 2))
+                        if rms > rms_threshold:
+                            if not started_speech:
+                                started_speech = True
+                                self.vad_detecting_speech = True
+                                speech_start_time = now
+                            silence_start_time = None
+                        else:
+                            if started_speech:
+                                if silence_start_time is None:
+                                    silence_start_time = now
+                                elif (now - silence_start_time) > self.recognizer.pause_threshold:
+                                    break
+                except (IOError, Exception):
                     pytime.sleep(0.01)
-                    continue
-
-                frames.append(raw_bytes)
-
-                # Check energy level to detect start of speech / silence
-                audio_np = np.frombuffer(raw_bytes, dtype=np.int16)
-                if len(audio_np) > 0:
-                    rms = np.sqrt(np.mean(audio_np.astype(np.float32) ** 2))
-                    if rms > rms_threshold:
-                        if not started_speech:
-                            started_speech = True
-                            speech_start_time = now
-                        silence_start_time = None
-                    else:
-                        if started_speech:
-                            if silence_start_time is None:
-                                silence_start_time = now
-                            elif (now - silence_start_time) > self.recognizer.pause_threshold:
-                                break
-            except (IOError, Exception):
-                pytime.sleep(0.01)
+        finally:
+            self.recording_active = False
+            self.vad_detecting_speech = False
 
         if not frames:
             return None

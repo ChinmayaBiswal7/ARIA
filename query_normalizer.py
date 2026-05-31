@@ -79,6 +79,19 @@ class QueryNormalizer:
         (r"\bexplain\s+it\b", "explain it"),
         (r"\bexplain\s+that\b", "explain that"),
 
+        # Typo/STT corrections
+        (r"\bdisble\b", "disable"),
+        (r"\bdiable\b", "disable"),
+        (r"\bdeactivte\b", "deactivate"),
+        (r"\bgestre\b", "gesture"),
+        (r"\bgestur\b", "gesture"),
+        (r"\bcontorls\b", "controls"),
+        (r"\bcontrls\b", "controls"),
+        (r"\bwrkng\b", "working"),
+        (r"\bremng\b", "remaining"),
+        (r"\boyher\b", "other"),
+        (r"\bavce\b", "active"),
+
         # Generic cleanups (apply last, less risky)
         (r"\bi\s+am\s+looking\s+for\b", "search for"),
     ]

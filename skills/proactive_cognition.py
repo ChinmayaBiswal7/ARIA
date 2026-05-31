@@ -115,8 +115,18 @@ class ProactiveCognition:
             return suggestion
         elif emotion in ["stressed", "anxious", "frustrated"]:
             self.trigger_proactive_speak()
-            suggestion = f"You seem a bit stressed, {username}? Perhaps a short break would help clear your mind."
-            self.last_suggestion_text = suggestion
+            import random
+            STRESS_RESPONSES = [
+                f"You seem a bit stressed, {username}? Perhaps a short break would help clear your mind.",
+                f"Everything alright, {username}? You've seemed a bit tense lately.",
+                f"Hey {username}, noticed you seem stressed. I'm here if you need anything.",
+                f"I've noticed you seem quite stressed lately, {username}. Is everything okay?",
+                None,
+                None,
+                None,
+            ]
+            suggestion = random.choice(STRESS_RESPONSES)
+            self.last_suggestion_text = suggestion or ""
             return suggestion
         elif emotion == "tired":
             self.trigger_proactive_speak()
