@@ -438,9 +438,9 @@ class SelfModelValidator:
                     prev_trust = float(snap["trust"])
                     prev_comfort = float(snap["comfort"])
                 else:
-                    # No recent snapshot — fall back to defaults
-                    prev_trust = default_trust
-                    prev_comfort = default_comfort
+                    # No recent snapshot — fall back to current values to avoid startup spikes
+                    prev_trust = current_trust
+                    prev_comfort = current_comfort
 
                 trust_delta = current_trust - prev_trust
                 comfort_delta = current_comfort - prev_comfort

@@ -81,7 +81,9 @@ class FirebaseSync:
         self._access_token    = None
         self._token_expiry    = 0
         self.status_updated_during_cmd = False
-        self._reply_context   = threading.local()
+        self.current_command_id = None
+        self.last_message     = "ARIA online. Ready."
+        self.first_read_done  = False
         self._load_config()
 
     # ── Config ────────────────────────────────────────────────────────────────
@@ -109,25 +111,18 @@ class FirebaseSync:
         if not cmd_text:
             return False
 
-        cmd_ts = self._normalize_command_ts(cmd_ts)
-        if not cmd_ts:
-            print(f"[FirebaseSync] Ignoring command without timestamp: '{cmd_text}'")
-            return False
-
-        if cmd_ts < self.command_start_cutoff_ms:
-            if cmd_id != self.last_cmd_id:
-                print(f"[FirebaseSync] Ignoring old command from before startup: '{cmd_text}'")
-                self.last_cmd_id = cmd_id
-                self.last_cmd_ts = max(self.last_cmd_ts, cmd_ts)
+        # If we have never recorded any command, treat it as the initial one (sanity fallback)
+        if self.last_cmd_id is None:
+            self.last_cmd_id = cmd_id
+            self.last_cmd_ts = self._normalize_command_ts(cmd_ts)
             return False
 
         new_id = cmd_id and cmd_id != self.last_cmd_id
-        new_ts = cmd_ts > self.last_cmd_ts
-        if not (new_id or new_ts):
+        if not new_id:
             return False
 
         self.last_cmd_id = cmd_id
-        self.last_cmd_ts = cmd_ts
+        self.last_cmd_ts = self._normalize_command_ts(cmd_ts)
         return True
 
     # ── SDK Init ──────────────────────────────────────────────────────────────
@@ -176,7 +171,20 @@ class FirebaseSync:
         if status_str != "thinking":
             self.status_updated_during_cmd = True
 
-        command_id = getattr(self._reply_context, "command_id", None)
+        # Cache/update the last message
+        if message:
+            self.last_message = message
+        else:
+            message = getattr(self, "last_message", "ARIA online. Ready.")
+
+        command_id = getattr(self, "current_command_id", None)
+
+        sw, sh = 1920, 1080
+        try:
+            import pyautogui
+            sw, sh = pyautogui.size()
+        except Exception:
+            pass
 
         if self.firestore_client:
             try:
@@ -185,10 +193,16 @@ class FirebaseSync:
                     "last_response": message,
                     "timestamp":     time.time(),
                     "reply_target":  "phone" if command_id else "laptop",
+                    "screen_w":      sw,
+                    "screen_h":      sh,
                 }
                 if command_id:
                     data["command_id"] = command_id
                 self.firestore_client.collection("status").document("latest").set(data)
+                
+                # Clear command context after returning to idle
+                if status_str == "idle":
+                    self.current_command_id = None
                 return
             except Exception as e:
                 print(f"[FirebaseSync] SDK status update failed: {e}")
@@ -201,6 +215,8 @@ class FirebaseSync:
             "last_response": {"stringValue": message},
             "timestamp":     {"doubleValue": time.time()},
             "reply_target":  {"stringValue": "phone" if command_id else "laptop"},
+            "screen_w":      {"integerValue": sw},
+            "screen_h":      {"integerValue": sh},
         }}
         if command_id:
             payload["fields"]["command_id"] = {"stringValue": command_id}
@@ -213,6 +229,10 @@ class FirebaseSync:
                                          headers=headers, method="PATCH")
             with urllib.request.urlopen(req, timeout=10):
                 pass
+            
+            # Clear command context after returning to idle
+            if status_str == "idle":
+                self.current_command_id = None
         except Exception as e:
             print(f"[FirebaseSync] REST status update failed: {e}")
 
@@ -226,6 +246,14 @@ class FirebaseSync:
             cmd_text = data.get("text")
             cmd_ts   = data.get("timestamp", 0)
             image_b64 = data.get("image_b64")
+
+            # Ignore whatever command is already in Firestore at startup
+            if not self.first_read_done:
+                self.first_read_done = True
+                self.last_cmd_id = cmd_id
+                self.last_cmd_ts = self._normalize_command_ts(cmd_ts)
+                print(f"[FirebaseSync] Initial SDK startup command ignored: '{cmd_text}' (id={cmd_id})")
+                continue
 
             if self._is_fresh_command(cmd_id, cmd_text, cmd_ts):
                 print(f"[FirebaseSync] SDK command received: '{cmd_text}' (id={cmd_id})")
@@ -263,6 +291,13 @@ class FirebaseSync:
                     cmd_ts   = float(cmd_ts) if cmd_ts else 0
                     image_b64 = fields.get("image_b64", {}).get("stringValue")
 
+                    if not self.first_read_done:
+                        self.first_read_done = True
+                        self.last_cmd_id = cmd_id
+                        self.last_cmd_ts = self._normalize_command_ts(cmd_ts)
+                        print(f"[FirebaseSync] Initial REST startup command ignored: '{cmd_text}' (id={cmd_id})")
+                        continue
+
                     if self._is_fresh_command(cmd_id, cmd_text, cmd_ts):
                         print(f"[FirebaseSync] REST command received: '{cmd_text}' (id={cmd_id})")
                         threading.Thread(target=self._execute_remote_command,
@@ -292,8 +327,7 @@ class FirebaseSync:
     def _execute_remote_command(self, cmd_text, image_b64=None, cmd_id=None):
         try:
             print(f"[FirebaseSync] Executing remote command: '{cmd_text}'")
-            previous_cmd_id = getattr(self._reply_context, "command_id", None)
-            self._reply_context.command_id = cmd_id
+            self.current_command_id = cmd_id
             self.status_updated_during_cmd = False
             self.update_status(f"Executing: {cmd_text}", status_str="thinking")
             
@@ -315,12 +349,64 @@ class FirebaseSync:
             self.callback(cmd_text, image=image, remote=True)
             if not self.status_updated_during_cmd:
                 self.update_status(f"Done: {cmd_text}", status_str="idle")
+            
+            # Immediately capture and upload screenshot for fast phone feedback
+            self.capture_and_upload_screenshot()
         except Exception as e:
             print(f"[FirebaseSync] Command execution error: {e}")
             if not self.status_updated_during_cmd:
                 self.update_status(f"Error: {e}", status_str="idle")
-        finally:
-            self._reply_context.command_id = previous_cmd_id
+
+    def capture_and_upload_screenshot(self):
+        """Captures the current screen, compresses it, and updates Firestore doc status/latest."""
+        try:
+            import pyautogui
+            import io
+            import base64
+            from PIL import Image
+
+            # Take screenshot
+            img = pyautogui.screenshot()
+            # Resize to 960x540 for faster transmission
+            img = img.resize((960, 540))
+            # Save to JPEG bytes
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=60)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            
+            # Write to Firestore
+            if self.firestore_client:
+                doc_ref = self.firestore_client.collection("status").document("latest")
+                doc_ref.update({"screenshot": b64})
+            else:
+                # REST fallback
+                url = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
+                       f"/databases/(default)/documents/status/latest?updateMask.fieldPaths=screenshot")
+                payload = {"fields": {
+                    "screenshot": {"stringValue": b64}
+                }}
+                headers = {"Content-Type": "application/json"}
+                token = self._get_bearer_token()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                             headers=headers, method="PATCH")
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+        except Exception as e:
+            print(f"[FirebaseSync] Screenshot capture/upload failed: {e}")
+
+    def _screenshot_loop(self):
+        """Periodically uploads screenshot to Firebase so phone sees PC screen updates."""
+        print("[FirebaseSync] Screenshot loop started.")
+        while self.running:
+            # Wait 5 seconds between periodic uploads
+            for _ in range(50):
+                if not self.running:
+                    break
+                time.sleep(0.1)
+            if self.running:
+                self.capture_and_upload_screenshot()
 
     # ── Heartbeat Loop ────────────────────────────────────────────────────────
     def _heartbeat_loop(self):
@@ -377,6 +463,10 @@ class FirebaseSync:
         # Start background heartbeat thread
         self.hb_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self.hb_thread.start()
+
+        # Start background screenshot thread
+        self.ss_thread = threading.Thread(target=self._screenshot_loop, daemon=True)
+        self.ss_thread.start()
 
         # 1. Try firebase-admin SDK (real-time, no polling)
         if self._init_sdk():

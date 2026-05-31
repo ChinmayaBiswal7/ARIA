@@ -82,6 +82,8 @@ class ModelGenerator:
         self._generating   = False
         self.progress      = 0
         self.progress_msg  = ""
+        self.generation_timed_out = False
+        self.generation_completed_late = False
         self._lock         = threading.Lock()
         os.makedirs(output_dir, exist_ok=True)
 
@@ -119,36 +121,86 @@ class ModelGenerator:
             print(f"[ModelGen] Cloud check skipped: {_e}")
 
         # ── Local cache check (only if large enough to be real) ───────────────
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 50000:
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
             print(f"[ModelGen] Local cache hit: {out_path}")
             if callback:
                 callback(out_path)
             return out_path
         elif os.path.exists(out_path):
-            print(f"[ModelGen] Cached file too small (procedural), regenerating...")
+            print(f"[ModelGen] Cached file too small (corrupted/empty), regenerating...")
             try:
                 os.remove(out_path)
             except Exception:
                 pass
 
-        def _run():
-            path = self._run_internal(prompt, out_path)
-            if path:
-                # Background upload → Firebase Storage + delete local file
-                try:
-                    from skills.model_cloud_manager import ModelCloudManager
-                    ModelCloudManager().upload_async(safe_name, path, prompt=prompt)
-                except Exception as upload_err:
-                    print(f"[ModelGen] Cloud upload skipped: {upload_err}")
-            if callback and path:
-                callback(path)
-            return path
+        def _run_with_timeout():
+            self.generation_timed_out = False
+            self.generation_completed_late = False
+            res_holder = []
+            start_t = time.time()
+            
+            def target():
+                res = self._run_internal(prompt, out_path)
+                res_holder.append(res)
+                
+            t = threading.Thread(target=target, name=f"ShapE-Worker-{safe_name}", daemon=True)
+            t.start()
+            t.join(timeout=180.0) # 3-minute timeout
+            
+            if t.is_alive():
+                print(f"[ModelGen] TIMEOUT: Shap-E generation for '{safe_name}' took longer than 180s on CPU. Falling back to procedural.")
+                self.generation_timed_out = True
+                
+                # Generate procedural geometry
+                path = self._generate_procedural(prompt, out_path)
+                if callback:
+                    try:
+                        callback(path, is_completed_late=False)
+                    except TypeError:
+                        callback(path)
+                
+                # Let the background thread continue running to complete and upload the model
+                t.join()
+                duration = time.time() - start_t
+                path = res_holder[0] if res_holder else None
+                if path:
+                    print(f"[ModelGen] Shap-E generation actually completed for '{prompt}' in {duration:.1f}s. Saved to: {path}")
+                    self.generation_completed_late = True
+                    # Sync to Firebase Storage
+                    try:
+                        from skills.model_cloud_manager import ModelCloudManager
+                        ModelCloudManager().upload_async(safe_name, path, prompt=prompt)
+                    except Exception as upload_err:
+                        print(f"[ModelGen] Cloud upload skipped: {upload_err}")
+                    if callback:
+                        try:
+                            callback(path, is_completed_late=True)
+                        except TypeError:
+                            callback(path)
+                return path
+            else:
+                duration = time.time() - start_t
+                path = res_holder[0] if res_holder else None
+                if path:
+                    print(f"[ModelGen] Shap-E generation actually completed for '{prompt}' in {duration:.1f}s. Saved to: {path}")
+                    # Sync to Firebase Storage
+                    try:
+                        from skills.model_cloud_manager import ModelCloudManager
+                        ModelCloudManager().upload_async(safe_name, path, prompt=prompt)
+                    except Exception as upload_err:
+                        print(f"[ModelGen] Cloud upload skipped: {upload_err}")
+                if callback and path:
+                    try:
+                        callback(path, is_completed_late=False)
+                    except TypeError:
+                        callback(path)
+                return path
 
         if callback:
-            threading.Thread(target=_run, daemon=True).start()
+            threading.Thread(target=_run_with_timeout, daemon=True).start()
             return None
         else:
-            return _run()
+            return _run_with_timeout()
 
 
     def _run_internal(self, prompt, out_path):

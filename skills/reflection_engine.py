@@ -27,6 +27,7 @@ class ReflectionEngine:
             if cls._instance is None:
                 inst = super().__new__(cls)
                 inst._reflection_depth = 0
+                inst._session_trust_delta_total = 0.0
                 inst._init_db()
                 cls._instance = inst
             return cls._instance
@@ -88,28 +89,69 @@ class ReflectionEngine:
         if username in self._in_memory_metrics:
             return self._in_memory_metrics[username]
 
+        sqlite_metrics = None
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT trust, comfort, interaction_depth, emotional_openness FROM relationship_vector WHERE username = ?",
                 (username,)
             ).fetchone()
-        
         if row:
-            metrics = dict(row)
+            sqlite_metrics = dict(row)
         else:
-            # Insert defaults once in DB
+            sqlite_metrics = {"trust": 10.0, "comfort": 10.0, "interaction_depth": 10.0, "emotional_openness": 10.0}
+
+        firebase_metrics = None
+        try:
+            from skills.memory_manager import MemoryManager
+            mm = MemoryManager()
+            if mm.firestore:
+                doc = mm.firestore.collection("users").document(username).collection("relationship").document("vector").get()
+                if doc.exists:
+                    data = doc.to_dict()
+                    firebase_metrics = {
+                        "trust": float(data.get("trust", 10.0)),
+                        "comfort": float(data.get("comfort", 10.0)),
+                        "interaction_depth": float(data.get("interaction_depth", 10.0)),
+                        "emotional_openness": float(data.get("emotional_openness", 10.0))
+                    }
+        except Exception as e:
+            print(f"[ReflectionEngine] Firebase relationship vector load failed: {e}")
+
+        # Diagnostic logs
+        if firebase_metrics is not None:
+            print(f"[ARIA Startup Diagnostic] SQLite trust before sync: {sqlite_metrics['trust']:.2f}")
+            print(f"[ARIA Startup Diagnostic] Firebase trust fetched: {firebase_metrics['trust']:.2f}")
+            metrics = firebase_metrics
+            print(f"[ARIA Startup Diagnostic] Trust after sync: {metrics['trust']:.2f}")
+            
+            # Sync to SQLite local cache
             now = time.time()
             with _lock:
                 with self._get_conn() as conn:
                     conn.execute(
-                        """INSERT OR IGNORE INTO relationship_vector 
+                        """INSERT OR REPLACE INTO relationship_vector 
                            (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
-                           VALUES (?, 10.0, 10.0, 10.0, 10.0, ?)""",
-                        (username, now)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (username, metrics["trust"], metrics["comfort"], metrics["interaction_depth"], metrics["emotional_openness"], now)
                     )
                     conn.commit()
-            metrics = {"trust": 10.0, "comfort": 10.0, "interaction_depth": 10.0, "emotional_openness": 10.0}
-        
+        else:
+            print(f"[ARIA Startup Diagnostic] SQLite trust: {sqlite_metrics['trust']:.2f} (No Firebase sync)")
+            metrics = sqlite_metrics
+            
+            # Insert defaults if neither has it
+            if not row:
+                now = time.time()
+                with _lock:
+                    with self._get_conn() as conn:
+                        conn.execute(
+                            """INSERT OR IGNORE INTO relationship_vector 
+                               (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                               VALUES (?, 10.0, 10.0, 10.0, 10.0, ?)""",
+                            (username, now)
+                        )
+                        conn.commit()
+
         self._in_memory_metrics[username] = metrics
         return metrics
 
@@ -117,6 +159,20 @@ class ReflectionEngine:
         username = username.lower().strip()
         metrics = self.get_relationship_vector(username)
         
+        # Clamp positive trust changes (gains)
+        if delta_trust > 0.0:
+            # 1. Single interaction cap of +0.5
+            clamped_delta = min(0.5, delta_trust)
+            
+            # 2. Session increase cap of +3.0
+            session_total = getattr(self, "_session_trust_delta_total", 0.0)
+            if session_total + clamped_delta > 3.0:
+                clamped_delta = max(0.0, 3.0 - session_total)
+                print(f"[ReflectionEngine] Session trust increase capped. Total session increase would exceed +3.0.")
+            
+            self._session_trust_delta_total = session_total + clamped_delta
+            delta_trust = clamped_delta
+
         # Enforce trust floor of 7.0 (under normal circumstances, but 0.0 if hostile)
         floor = 0.0 if hostile else 7.0
         new_trust = max(floor, min(10.0, metrics["trust"] + delta_trust))
@@ -145,6 +201,22 @@ class ReflectionEngine:
                     )
                     conn.commit()
             print(f"[ReflectionEngine] Persisted relationship metrics for user '{username}': {metrics}")
+
+            # Sync to Firebase Firestore
+            try:
+                from skills.memory_manager import MemoryManager
+                mm = MemoryManager()
+                if mm.firestore:
+                    mm.firestore.collection("users").document(username).collection("relationship").document("vector").set({
+                        "trust": metrics["trust"],
+                        "comfort": metrics["comfort"],
+                        "interaction_depth": metrics["interaction_depth"],
+                        "emotional_openness": metrics["emotional_openness"],
+                        "updated_at": now
+                    })
+                    print(f"[ReflectionEngine] Synced relationship metrics to Firebase for '{username}'.")
+            except Exception as e:
+                print(f"[ReflectionEngine] Firebase relationship metrics sync failed: {e}")
 
     def get_relationship_labels(self, username: str) -> Dict[str, str]:
         """Provides human-readable soft labels for dashboard mapping."""

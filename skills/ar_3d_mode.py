@@ -27,15 +27,13 @@ import numpy as np
 # ── Gesture state shared between threads ──────────────────────────────────────
 class GestureState:
     def __init__(self):
-        self.rotate_x   = 0.0
-        self.rotate_y   = 0.0
-        self.zoom       = 1.0
-        self.grabbed    = False
-        self.grab_pos   = (0.0, 0.0)
-        self.explode     = False
-        self.reset       = False
-        self.pinch_dist  = 0.0
-        self.hand_visible = False
+        self.active_gesture = "None"
+        self.hand_pos       = (0.5, 0.5)
+        self.hand_size      = 0.0
+        self.index_tip      = (0.5, 0.5)
+        self.hand_visible   = False
+        self.candidate_gesture = "None"
+        self.candidate_gesture_start_time = 0.0
         self.lock = threading.Lock()
 
 _gesture = GestureState()
@@ -73,6 +71,7 @@ def match_model(cmd):
 
 
 # ── Hologram color palette ────────────────────────────────────────────────────
+# Hologram colors (RGBA)
 HOLO_COLORS = {
     "blue":   (0.1, 0.6, 1.0, 0.85),
     "cyan":   (0.0, 0.9, 1.0, 0.85),
@@ -105,6 +104,10 @@ class AR3DMode:
         # Command queue (thread-safe)
         self._cmd_queue = []
         self._cmd_lock  = threading.Lock()
+
+    @property
+    def thread(self):
+        return self._thread
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -140,32 +143,70 @@ class AR3DMode:
         """Pass a voice command string for processing."""
         cmd = cmd.lower().strip()
 
-        # Model creation
+        # Check action/transform commands first to avoid trigger collisions with model names
+        if "move" in cmd:
+            if "left" in cmd:
+                self._queue_cmd("move:x:-0.3")
+                return "Moving model left."
+            elif "right" in cmd:
+                self._queue_cmd("move:x:0.3")
+                return "Moving model right."
+            elif "up" in cmd:
+                self._queue_cmd("move:y:0.3")
+                return "Moving model up."
+            elif "down" in cmd:
+                self._queue_cmd("move:y:-0.3")
+                return "Moving model down."
+        
+        if "rotate" in cmd:
+            if "left" in cmd:
+                self._queue_cmd("rotate:y:-15")
+                return "Rotating model left."
+            elif "right" in cmd:
+                self._queue_cmd("rotate:y:15")
+                return "Rotating model right."
+            elif "up" in cmd:
+                self._queue_cmd("rotate:x:-15")
+                return "Rotating model up."
+            elif "down" in cmd:
+                self._queue_cmd("rotate:x:15")
+                return "Rotating model down."
+
+        if "bigger" in cmd or "larger" in cmd or "zoom in" in cmd or "scale up" in cmd:
+            self._queue_cmd("scale:1.2")
+            return "Making model bigger."
+        elif "smaller" in cmd or "zoom out" in cmd or "scale down" in cmd:
+            self._queue_cmd("scale:0.8")
+            return "Making model smaller."
+
+        if "reset" in cmd or "center" in cmd:
+            self._queue_cmd("reset")
+            return "Resetting model view."
+
+        if "wireframe" in cmd:
+            self._queue_cmd("wireframe")
+            return "Toggling wireframe mode."
+
+        if "explode" in cmd:
+            self._queue_cmd("explode")
+            return "Exploding model."
+
+        if "show controls" in cmd or "controls" in cmd:
+            self._queue_cmd("show_controls")
+            return "Showing controls guide."
+
+        if "change color" in cmd or "color" in cmd:
+            for color in HOLO_COLORS:
+                if color in cmd:
+                    self._queue_cmd(f"color:{color}")
+                    return f"Color changed to {color}."
+
+        # Model creation/loading (check last to prevent collision)
         key = match_model(cmd)
         if key:
             self.load_model(key)
             return f"Loading {key} model."
 
-        # View commands
-        if "rotate left"  in cmd: self._queue_cmd("rotate:y:-3")
-        elif "rotate right" in cmd: self._queue_cmd("rotate:y:3")
-        elif "rotate up"    in cmd: self._queue_cmd("rotate:x:-3")
-        elif "rotate down"  in cmd: self._queue_cmd("rotate:x:3")
-        elif "bigger" in cmd or "larger" in cmd or "zoom in" in cmd:
-            self._queue_cmd("scale:1.2")
-        elif "smaller" in cmd or "zoom out" in cmd:
-            self._queue_cmd("scale:0.8")
-        elif "reset" in cmd:
-            self._queue_cmd("reset")
-        elif "wireframe" in cmd:
-            self._queue_cmd("wireframe")
-        elif "explode" in cmd:
-            self._queue_cmd("explode")
-        elif "change color" in cmd or "color" in cmd:
-            for color in HOLO_COLORS:
-                if color in cmd:
-                    self._queue_cmd(f"color:{color}")
-                    return f"Color changed to {color}."
         return None
 
     def update_hand(self, hand_landmarks, frame_w, frame_h):
@@ -176,47 +217,62 @@ class AR3DMode:
         if hand_landmarks is None:
             with _gesture.lock:
                 _gesture.hand_visible = False
+                _gesture.active_gesture = "None"
+                _gesture.candidate_gesture = "None"
+                _gesture.candidate_gesture_start_time = 0.0
             return
 
         lms = hand_landmarks.landmark
-        w, h = frame_w, frame_h
 
-        def px(idx):
-            return lms[idx].x * w, lms[idx].y * h
+        # Pinch: distance between index tip (8) and thumb tip (4)
+        pinch_dist = math.hypot(lms[8].x - lms[4].x, lms[8].y - lms[4].y)
+        pinching = pinch_dist < 0.07
 
-        index_tip = px(8)
-        thumb_tip  = px(4)
-        middle_tip = px(12)
-        wrist      = px(0)
-
-        # Pinch distance (index + thumb)
-        pinch = math.hypot(index_tip[0] - thumb_tip[0],
-                           index_tip[1] - thumb_tip[1])
-        pinching = pinch < w * 0.07
-
-        # Two-finger zoom: distance between index and middle fingertip
-        two_finger_dist = math.hypot(index_tip[0] - middle_tip[0],
-                                     index_tip[1] - middle_tip[1]) / w
-
-        # Fist detection
+        # Extended fingers: tip.y < pip.y
         tips = [8, 12, 16, 20]
         pips = [6, 10, 14, 18]
-        folded = sum(1 for t, p in zip(tips, pips)
-                     if lms[t].y > lms[p].y)
-        fist = folded >= 3
+        extended_fingers = [lms[t].y < lms[p].y for t, p in zip(tips, pips)]
+        extended_count = sum(extended_fingers)
 
-        # Palm open (all fingers extended)
-        extended = sum(1 for t, p in zip(tips, pips)
-                       if lms[t].y < lms[p].y)
-        palm_open = extended >= 4
+        raw_gesture = "None"
+        if pinching:
+            raw_gesture = "MOVE"
+        elif extended_count == 1 and extended_fingers[0]:
+            raw_gesture = "ROTATE"
+        elif extended_count == 0:
+            raw_gesture = "RELEASE"
 
+        # Hand size: distance from wrist (0) to middle MCP (9)
+        hand_size = math.hypot(lms[9].x - lms[0].x, lms[9].y - lms[0].y)
+
+        # Silent hand logs unless transitions occur
         with _gesture.lock:
-            _gesture.hand_visible = True
-            _gesture.grabbed      = pinching
-            _gesture.grab_pos     = (lms[9].x - 0.5, -(lms[9].y - 0.5))
-            _gesture.pinch_dist   = two_finger_dist
-            _gesture.explode      = fist
-            _gesture.reset        = palm_open
+            import time
+            now = time.time()
+            if raw_gesture != _gesture.candidate_gesture:
+                _gesture.candidate_gesture = raw_gesture
+                _gesture.candidate_gesture_start_time = now
+            
+            # Check 0.3-second hold
+            target_gesture = _gesture.active_gesture
+            if now - _gesture.candidate_gesture_start_time >= 0.3:
+                target_gesture = _gesture.candidate_gesture
+
+            # Transition logging
+            if target_gesture != _gesture.active_gesture:
+                print(f"[AR3D] Gesture changed -> {target_gesture}")
+                if target_gesture == "MOVE":
+                    print("MODEL MOVED")
+                elif target_gesture == "ROTATE":
+                    print("ROTATE DETECTED")
+                elif pinching:
+                    print("PINCH DETECTED")
+
+            _gesture.hand_visible   = True
+            _gesture.active_gesture = target_gesture
+            _gesture.hand_pos       = (lms[9].x, lms[9].y)
+            _gesture.hand_size      = hand_size
+            _gesture.index_tip      = (lms[8].x, lms[8].y)
 
     # ── Command Queue ─────────────────────────────────────────────────────────
 
@@ -233,13 +289,13 @@ class AR3DMode:
     # ── Ursina Thread ─────────────────────────────────────────────────────────
 
     def _run_ursina(self):
-        import os
+        import os, time
         os.environ["VTK_SILENCE_GET_VOID_POINTER_WARNINGS"] = "1"
         os.environ["VTKWEB_DISABLE_LOGGING"] = "1"
 
         try:
             import vedo
-            from vedo import Plotter, Sphere, load, Assembly
+            from vedo import Plotter, Sphere, load, Assembly, Text2D
         except ImportError:
             print("[AR3D] vedo not installed. Run: pip install vedo")
             self._running = False
@@ -258,12 +314,52 @@ class AR3DMode:
         
         assembly = [vedo.Assembly(solid, wire)]
         needs_render = [False]
-        
-        plt.show(assembly[0], interactive=False, resetcam=True)
 
-        prev_grab_pos = None
-        prev_pinch = 0.0
+        # Create overlays
+        help_overlay = vedo.Text2D(
+            "👌 Pinch = Move  |  ☝️ One Finger = Rotate",
+            pos="top-left",
+            s=0.9,
+            c="cyan",
+            font="Courier",
+            bg="black",
+            alpha=0.8
+        )
+        gesture_overlay = vedo.Text2D(
+            "",
+            pos="top-right",
+            s=0.9,
+            c="white",
+            font="Courier",
+            bg="black",
+            alpha=0.8
+        )
+        controls_text = (
+            "👌 Pinch      = Move\n"
+            "☝️ One Finger = Rotate\n"
+            "✊ Fist       = Release"
+        )
+        controls_overlay = vedo.Text2D(
+            controls_text,
+            pos="bottom-left",
+            s=0.9,
+            c="gold",
+            font="Courier",
+            bg="black",
+            alpha=0.9
+        )
+        
+        plt.show(assembly[0], help_overlay, gesture_overlay, interactive=False, resetcam=True)
+
+        prev_hand_pos = None
+        prev_hand_size = None
+        prev_index_pos = None
+        rot_history_y = []
+        rot_history_x = []
         was_generating = False
+        gesture_display_expiry = 0.0
+        controls_display_expiry = 0.0
+        last_shown_gesture = "None"
 
         while self._running:
             cmds = self._pop_cmds()
@@ -274,7 +370,7 @@ class AR3DMode:
                 elif cmd.startswith("load:"):
                     key = cmd.split(":", 1)[1]
 
-                    # \u2500\u2500 1. Try cloud stream first (no permanent disk use) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                    # ── 1. Try cloud stream first (no permanent disk use) ─────────────
                     obj_path = None
                     _active_tmp = getattr(self, "_active_tmp_path", None)
                     try:
@@ -292,7 +388,7 @@ class AR3DMode:
                     except Exception as cloud_err:
                         print(f"[AR3D] Cloud stream skipped: {cloud_err}")
 
-                    # \u2500\u2500 2. Fall back to local assets folder \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                    # ── 2. Fall back to local assets folder ───────────────────────────
                     if not obj_path:
                         local = os.path.join(
                             os.path.dirname(os.path.abspath(__file__)),
@@ -302,13 +398,32 @@ class AR3DMode:
                             obj_path = local
                             print(f"[AR3D] Loading from local disk: {local}")
                         else:
-                            print(f"[AR3D] No local file for '{key}' either \u2014 using procedural sphere.")
+                            print(f"[AR3D] No local file for '{key}' either — using procedural sphere.")
 
                     try:
                         if obj_path:
                             new_mesh = vedo.load(obj_path)
                         else:
                             new_mesh = vedo.Sphere(r=1)
+
+                        # Print original bounds/center as requested by Issue 2
+                        b = new_mesh.bounds()
+                        center = new_mesh.center_of_mass()
+                        print(f"[AR3D] Loaded Model: '{key}' (or fallback)")
+                        print(f"[AR3D] original bounds: {b}")
+                        print(f"[AR3D] original center: {center}")
+
+                        # Shift to origin to center the model
+                        new_mesh.shift(-center)
+                        
+                        # Normalize scale so maximum dimension is 2.0 (standard visible unit size)
+                        dx, dy, dz = b[1] - b[0], b[3] - b[2], b[5] - b[4]
+                        max_dim = max(dx, dy, dz)
+                        if max_dim > 0:
+                            scale_factor = 2.0 / max_dim
+                            new_mesh.scale(scale_factor)
+                            print(f"[AR3D] Normalized model size. Scaling by: {scale_factor:.4f} (max dim: {max_dim:.4f})")
+
                         new_mesh.compute_normals()
                         new_mesh.lighting("glossy")
                         new_mesh.c("cyan").alpha(0.7)
@@ -316,10 +431,26 @@ class AR3DMode:
                         wire.wireframe(True).c("white").alpha(0.15)
                         assembly[0] = vedo.Assembly(new_mesh, wire)
                         plt.clear()
-                        plt.add(assembly[0])
+                        plt.add(assembly[0], help_overlay, gesture_overlay)
                         plt.reset_camera()
                         needs_render[0] = True
                         print(f"[AR3D] Model loaded: {key}")
+
+                        # Force AR3D window to topmost
+                        try:
+                            import ctypes
+                            hwnd = ctypes.windll.user32.FindWindowW(None, "ARIA AR 3D Hologram")
+                            if hwnd:
+                                # -1 is HWND_TOPMOST, 2 | 1 | 0x0040 is SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+                                ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 2 | 1 | 0x0040)
+                                print("[AR3D] Window forced to topmost via Win32 API.")
+                        except Exception as win_err:
+                            print(f"[AR3D] Could not set window topmost: {win_err}")
+                        try:
+                            import cv2
+                            cv2.setWindowProperty("ARIA AR 3D Hologram", cv2.WND_PROP_TOPMOST, 1)
+                        except Exception:
+                            pass
                     except Exception as e:
                         import traceback; traceback.print_exc()
 
@@ -339,9 +470,9 @@ class AR3DMode:
                         solid = parts[0]
                         subparts = solid.splitByConnectivity()
                         if len(subparts) > 1:
-                            center = solid.centerOfMass()
+                            center = solid.center_of_mass()
                             for m in subparts:
-                                part_center = m.centerOfMass()
+                                part_center = m.center_of_mass()
                                 shift = (part_center - center) * 0.3
                                 m.shift(shift)
                     except Exception as e:
@@ -349,6 +480,8 @@ class AR3DMode:
                     needs_render[0] = True
                 elif cmd == "reset":
                     plt.reset_camera()
+                    if self._current_model_key:
+                        self._queue_cmd(f"load:{self._current_model_key}")
                     needs_render[0] = True
                 elif cmd.startswith("rotate:"):
                     _, axis, deg = cmd.split(":")
@@ -357,36 +490,113 @@ class AR3DMode:
                     elif axis == "x":
                         assembly[0].rotate_x(float(deg))
                     needs_render[0] = True
+                elif cmd.startswith("scale:"):
+                    factor = float(cmd.split(":", 1)[1])
+                    assembly[0].scale(factor)
+                    needs_render[0] = True
+                elif cmd.startswith("move:"):
+                    _, axis, val = cmd.split(":")
+                    shift_val = float(val)
+                    if axis == "x":
+                        assembly[0].shift([shift_val, 0, 0])
+                    elif axis == "y":
+                        assembly[0].shift([0, shift_val, 0])
+                    elif axis == "z":
+                        assembly[0].shift([0, 0, shift_val])
+                    needs_render[0] = True
+                elif cmd == "show_controls":
+                    controls_display_expiry = time.time() + 10.0
 
-            # Apply hand gesture rotation & zoom
+            # Apply hand gesture rotation, scale, and movement
             with _gesture.lock:
                 hand_vis = _gesture.hand_visible
-                grabbed  = _gesture.grabbed
-                grab_pos = _gesture.grab_pos
-                pinch_d  = _gesture.pinch_dist
+                active_g = _gesture.active_gesture
+                hand_pos = _gesture.hand_pos
+                hand_size = _gesture.hand_size
+                index_t  = _gesture.index_tip
 
-            # Rotation
-            if grabbed and hand_vis and assembly[0]:
-                if prev_grab_pos is not None:
-                    dx = grab_pos[0] - prev_grab_pos[0]
-                    dy = grab_pos[1] - prev_grab_pos[1]
-                    assembly[0].rotate_y(dx * 180)
-                    assembly[0].rotate_x(-dy * 180)
-                    needs_render[0] = True
-                prev_grab_pos = grab_pos
-            else:
-                prev_grab_pos = None
+            current_gesture_name = "None"
+            if hand_vis and assembly[0]:
+                if active_g == "MOVE":
+                    if prev_hand_pos is not None:
+                        dx = hand_pos[0] - prev_hand_pos[0]
+                        dy = -(hand_pos[1] - prev_hand_pos[1])
+                        # Deadzone < 0.01
+                        if abs(dx) > 0.01 or abs(dy) > 0.01:
+                            assembly[0].shift([dx * 5.0, dy * 5.0, 0])
+                            needs_render[0] = True
+                    prev_hand_pos = hand_pos
+                    current_gesture_name = "MOVE"
+                    
+                    # Reset other states
+                    prev_hand_size = None
+                    prev_index_pos = None
+                    rot_history_y.clear()
+                    rot_history_x.clear()
+                    
+                elif active_g == "ROTATE":
+                    if prev_index_pos is not None:
+                        dx = index_t[0] - prev_index_pos[0]
+                        dy = -(index_t[1] - prev_index_pos[1])
+                        # Deadzone < 0.01
+                        if abs(dx) > 0.01 or abs(dy) > 0.01:
+                            rot_y = dx * 180
+                            rot_x = -dy * 180
+                            
+                            # Smooth over 3 frames
+                            rot_history_y.append(rot_y)
+                            rot_history_x.append(rot_x)
+                            if len(rot_history_y) > 3:
+                                rot_history_y.pop(0)
+                                rot_history_x.pop(0)
+                            
+                            avg_rot_y = sum(rot_history_y) / len(rot_history_y)
+                            avg_rot_x = sum(rot_history_x) / len(rot_history_x)
+                            
+                            assembly[0].rotate_y(avg_rot_y)
+                            assembly[0].rotate_x(avg_rot_x)
+                            needs_render[0] = True
+                    prev_index_pos = index_t
+                    current_gesture_name = "ROTATE"
+                    
+                    # Reset other states
+                    prev_hand_pos = None
+                    prev_hand_size = None
+                    
+                else: # RELEASE or None
+                    prev_hand_pos = None
+                    prev_hand_size = None
+                    prev_index_pos = None
+                    rot_history_y.clear()
+                    rot_history_x.clear()
+                    current_gesture_name = "RELEASE" if active_g == "RELEASE" else "None"
+            else: # Hand not visible
+                prev_hand_pos = None
+                prev_hand_size = None
+                prev_index_pos = None
+                rot_history_y.clear()
+                rot_history_x.clear()
+                current_gesture_name = "No Hand"
 
-            # Zoom
-            if pinch_d > 0 and assembly[0]:
-                if prev_pinch > 0:
-                    zoom_delta = (pinch_d - prev_pinch) * 5
-                    if abs(zoom_delta) > 0.01:
-                        assembly[0].scale(1 + zoom_delta)
-                        needs_render[0] = True
-                prev_pinch = pinch_d
+            # Gesture status text overlay handling (shows for 2 seconds on change)
+            if current_gesture_name != last_shown_gesture:
+                if current_gesture_name in ["MOVE", "ROTATE"]:
+                    gesture_display_expiry = time.time() + 2.0
+                last_shown_gesture = current_gesture_name
+
+            if time.time() < gesture_display_expiry and last_shown_gesture in ["MOVE", "ROTATE"]:
+                gesture_overlay.text(f"Gesture: {last_shown_gesture}")
             else:
-                prev_pinch = 0.0
+                gesture_overlay.text("")
+
+            # Show controls guide overlay (for 10 seconds)
+            show_controls_now = time.time() < controls_display_expiry
+            if show_controls_now:
+                if controls_overlay not in plt.actors:
+                    plt.add(controls_overlay)
+            else:
+                if controls_overlay in plt.actors:
+                    plt.remove(controls_overlay)
 
             # Draw progress bar when generating
             is_generating = False
@@ -424,6 +634,7 @@ class AR3DMode:
                 plt.add(bar_bg, bar_fill, label)
                 if assembly[0]:
                     plt.add(assembly[0])
+                plt.add(help_overlay, gesture_overlay)
                 
                 plt.reset_camera()
                 plt.camera.SetPosition(0, 0, 8)
@@ -436,6 +647,7 @@ class AR3DMode:
                 plt.clear()
                 if assembly[0]:
                     plt.add(assembly[0])
+                plt.add(help_overlay, gesture_overlay)
                 plt.reset_camera()
                 needs_render[0] = True
                 was_generating = False
@@ -450,5 +662,8 @@ class AR3DMode:
                 plt.render()
             time.sleep(0.05)
 
-        plt.close()
+        try:
+            plt.close()
+        except Exception as e:
+            print(f"[AR3D] Error closing plotter: {e}")
         print("[AR3D] vedo window closed.")

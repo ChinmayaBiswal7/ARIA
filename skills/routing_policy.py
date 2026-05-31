@@ -33,6 +33,7 @@ CONVERSATIONAL_PATTERNS = [
     r"\b(thank you|thanks|nice|cool|great|awesome|okay|ok)\b",
     r"\b(i am fine|i'm fine|i feel|are you okay|do you feel|you there)\b",
     r"\b(who are you|what are you|tell me about yourself)\b",
+    r"\b(see you|bye|goodbye|talk later|see ya)\b",
 ]
 
 EXPLICIT_SEARCH_PREFIXES = [

@@ -194,6 +194,37 @@ class TestCognitiveSafeguards(unittest.TestCase):
             ).fetchone()
         self.assertIsNone(row, "Guest preference should not be saved in user_preferences profile")
 
+    def test_trust_clamping(self):
+        """Trust gains must be clamped to +0.5 per interaction and +3.0 per session."""
+        self.re._session_trust_delta_total = 0.0
+        with self.re._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO relationship_vector 
+                (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                VALUES (?, 7.0, 7.0, 7.0, 7.0, ?)
+            """, (self.test_user, time.time()))
+            conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user]
+
+        # Single interaction gain: update by +1.5 -> clamped to +0.5
+        self.re.update_relationship_metrics(self.test_user, delta_trust=1.5)
+        vec = self.re.get_relationship_vector(self.test_user)
+        self.assertAlmostEqual(vec["trust"], 7.5, places=2)
+
+        # Session limit: add more updates of +0.8 (each clamped to +0.5)
+        # 1st: +0.5 -> 8.0 (total=+1.0)
+        # 2nd: +0.5 -> 8.5 (total=+1.5)
+        # 3rd: +0.5 -> 9.0 (total=+2.0)
+        # 4th: +0.5 -> 9.5 (total=+2.5)
+        # 5th: +0.5 -> 10.0 (total=+3.0)
+        # 6th: +0.5 -> but cap reached, so +0.0 -> 10.0 (total=+3.0)
+        for _ in range(6):
+            self.re.update_relationship_metrics(self.test_user, delta_trust=0.8)
+
+        vec = self.re.get_relationship_vector(self.test_user)
+        self.assertAlmostEqual(vec["trust"], 10.0, places=2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

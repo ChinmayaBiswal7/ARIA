@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 
-export default function Console({ onSendCommand }) {
+export default function Console({ onSendCommand, isListening, onToggleMic }) {
   const [inputValue, setInputValue] = useState("");
   const fileInputRef = useRef(null);
 
@@ -65,6 +65,18 @@ export default function Console({ onSendCommand }) {
       <div className="glass-card input-section">
         <button className="camera-btn" onClick={handleCameraClick} title="Capture Photo">
           📷
+        </button>
+        <button 
+          className={`camera-btn ${isListening ? "active" : ""}`} 
+          onClick={onToggleMic} 
+          title={isListening ? "Mute Microphone" : "Unmute Microphone"}
+          style={{
+            borderColor: isListening ? "var(--green)" : "rgba(0, 229, 255, 0.2)",
+            boxShadow: isListening ? "0 0 10px rgba(16, 185, 129, 0.25)" : "none",
+            color: isListening ? "var(--green)" : "inherit"
+          }}
+        >
+          {isListening ? "🎙️" : "🎤"}
         </button>
         <input
           type="file"

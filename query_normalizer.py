@@ -103,7 +103,6 @@ class QueryNormalizer:
         r"\berm\s+",
         r"\berrr\s+",
         r"\blike\s+",  # Often inserted by STT
-        r"\byou\s+know\s+",
     ]
 
     # Accent normalization (common misrecognitions)

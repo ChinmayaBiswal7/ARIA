@@ -23,10 +23,16 @@ const db = getFirestore(app);
 
 export default function App() {
   const [status, setStatus] = useState("OFFLINE");
+  const [pcStatus, setPcStatus] = useState("OFFLINE");
   const [lastResponse, setLastResponse] = useState("Tap the sphere above to connect to ARIA");
   const [isInitialized, setIsInitialized] = useState(false);
   const [toast, setToast] = useState({ show: false, message: "" });
   const [connectionDotClass, setConnectionDotClass] = useState("status-dot offline");
+  const [screenshot, setScreenshot] = useState(null);
+  const [screenW, setScreenW] = useState(1920);
+  const [screenH, setScreenH] = useState(1080);
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [isSpeechActive, setIsSpeechActive] = useState(false);
 
   // Web Audio refs/states
   const [audioAnalyser, setAudioAnalyser] = useState(null);
@@ -36,12 +42,14 @@ export default function App() {
   const streamRef = useRef(null);
   const recognitionRef = useRef(null);
   const shouldListenRef = useRef(false);
+  const screenImageContainerRef = useRef(null);
   const lastSpokenTextRef = useRef("");
   const currentStatusRef = useRef("OFFLINE");
   const lastStatusTimestampRef = useRef(0);
   const sessionStartedAtRef = useRef(Date.now() / 1000);
   const suppressRecognitionUntilRef = useRef(0);
   const pendingLaptopCommandIdRef = useRef(null);
+  const wasListeningBeforeTtsRef = useRef(false);
 
   useEffect(() => {
     currentStatusRef.current = status;
@@ -58,6 +66,7 @@ export default function App() {
       // If we haven't received a heartbeat in 9 seconds, declare server OFFLINE
       if (timeDiff > 9.0) {
         setStatus("OFFLINE");
+        setPcStatus("OFFLINE");
         setConnectionDotClass("status-dot offline");
         setLastResponse("ARIA is offline. Please launch the laptop server.");
       }
@@ -136,8 +145,10 @@ export default function App() {
       return openPhoneTarget(`https://www.google.com/search?q=${encodeURIComponent(query)}`, "Google Search");
     }
 
-    setLastResponse("Phone command not supported yet. Try open WhatsApp, open YouTube, open camera, open settings, or say laptop followed by a laptop command.");
-    showToast("Phone command not supported");
+    // Fallback: Send any unmatched commands to the laptop/PC server
+    setLastResponse(`Sending to laptop: ${cleanText}`);
+    showToast("Sent to laptop");
+    await sendLaptopCommand(cleanText, imageB64);
   };
 
   // ── Speech Synthesizer (Text to Speech) ───────────────────────────────────
@@ -163,15 +174,27 @@ export default function App() {
 
     utterance.onstart = () => {
       setStatus("SPEAKING");
+      wasListeningBeforeTtsRef.current = shouldListenRef.current;
+      shouldListenRef.current = false;
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch (e) {}
+      }
     };
 
-    utterance.onend = () => {
+    const handleTtsEnd = () => {
+      shouldListenRef.current = wasListeningBeforeTtsRef.current;
       if (shouldListenRef.current) {
         setStatus("LISTENING");
+        if (recognitionRef.current) {
+          try { recognitionRef.current.start(); } catch (e) {}
+        }
       } else {
         setStatus("IDLE");
       }
     };
+
+    utterance.onend = handleTtsEnd;
+    utterance.onerror = handleTtsEnd;
 
     window.speechSynthesis.speak(utterance);
   };
@@ -204,28 +227,41 @@ export default function App() {
       if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SR();
-        recognition.continuous = true;
+        recognition.continuous = false;
         recognition.interimResults = false;
         recognition.lang = "en-US";
 
         recognition.onstart = () => {
           shouldListenRef.current = true;
+          setIsMicActive(true);
           setStatus("LISTENING");
           setConnectionDotClass("status-dot waiting");
         };
 
+        recognition.onspeechstart = () => {
+          setIsSpeechActive(true);
+        };
+
+        recognition.onspeechend = () => {
+          setIsSpeechActive(false);
+        };
+
         recognition.onend = () => {
+          setIsSpeechActive(false);
           if (shouldListenRef.current) {
             try {
               recognition.start();
             } catch (e) {
               // Already listening
             }
+          } else {
+            setIsMicActive(false);
           }
         };
 
         recognition.onerror = (e) => {
           console.error("Speech recognition error:", e);
+          setIsSpeechActive(false);
           if (shouldListenRef.current && e.error !== "not-allowed") {
             setTimeout(() => {
               try { recognition.start(); } catch (err) {}
@@ -234,6 +270,7 @@ export default function App() {
         };
 
         recognition.onresult = (e) => {
+          setIsSpeechActive(false);
           if (Date.now() < suppressRecognitionUntilRef.current) return;
           const resultIdx = e.resultIndex;
           const transcript = e.results[resultIdx][0].transcript;
@@ -277,6 +314,79 @@ export default function App() {
     }
   };
 
+  const handleScreenClick = async (e) => {
+    const container = screenImageContainerRef.current;
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    const containerW = rect.width;
+    const containerH = rect.height;
+    
+    // PC screen resolution aspect ratio
+    const imageRatio = screenW / screenH;
+    const containerRatio = containerW / containerH;
+    
+    let actualImageW = containerW;
+    let actualImageH = containerH;
+    let offsetX = 0;
+    let offsetY = 0;
+    
+    if (containerRatio > imageRatio) {
+      // Pillarbox (black bars left and right)
+      actualImageW = containerH * imageRatio;
+      offsetX = (containerW - actualImageW) / 2;
+    } else {
+      // Letterbox (black bars top and bottom)
+      actualImageH = containerW / imageRatio;
+      offsetY = (containerH - actualImageH) / 2;
+    }
+    
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    
+    const relativeX = clickX - offsetX;
+    const relativeY = clickY - offsetY;
+    
+    if (relativeX >= 0 && relativeX <= actualImageW && relativeY >= 0 && relativeY <= actualImageH) {
+      const nx = relativeX / actualImageW;
+      const ny = relativeY / actualImageH;
+      
+      const x = Math.round(nx * screenW);
+      const y = Math.round(ny * screenH);
+      
+      const clickCmd = `[CLICK: ${x},${y}]`;
+      showToast(`Clicked PC at ${x}, ${y}`);
+      await sendLaptopCommand(clickCmd);
+    } else {
+      console.log("Click ignored: outside actual screen area.");
+    }
+  };
+
+  const toggleMicrophone = async () => {
+    if (!isInitialized) {
+      await initializeRemote();
+      return;
+    }
+    
+    if (shouldListenRef.current) {
+      shouldListenRef.current = false;
+      setIsMicActive(false);
+      setStatus("IDLE");
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch(e) {}
+      }
+      showToast("Microphone muted");
+    } else {
+      shouldListenRef.current = true;
+      setIsMicActive(true);
+      setStatus("LISTENING");
+      if (recognitionRef.current) {
+        try { recognitionRef.current.start(); } catch(e) {}
+      }
+      showToast("Microphone listening");
+    }
+  };
+
   // ── Firestore Status Sync ─────────────────────────────────────────────────
   const connectFirestore = () => {
     const unsubscribe = onSnapshot(doc(db, "status", "latest"), (docSnap) => {
@@ -291,8 +401,19 @@ export default function App() {
         lastStatusTimestampRef.current = Date.now() / 1000;
       }
       const rawState = d.status || "idle";
+      setPcStatus(rawState.toUpperCase());
       if (rawState !== "speaking" && currentStatusRef.current !== "SPEAKING") {
         setStatus(rawState.toUpperCase());
+      }
+
+      if (d.screenshot) {
+        setScreenshot(d.screenshot);
+      }
+      if (d.screen_w) {
+        setScreenW(d.screen_w);
+      }
+      if (d.screen_h) {
+        setScreenH(d.screen_h);
       }
 
       const isPhoneReply =
@@ -324,6 +445,62 @@ export default function App() {
     return unsubscribe;
   };
 
+  const getCanvasState = () => {
+    if (status === "OFFLINE" || pcStatus === "OFFLINE") return "OFFLINE";
+    if (pcStatus === "THINKING") return "THINKING";
+    if (pcStatus === "SPEAKING" || status === "SPEAKING") return "SPEAKING";
+    if (isSpeechActive) return "LISTENING";
+    return pcStatus;
+  };
+
+  const toggleFullScreen = () => {
+    const el = screenImageContainerRef.current;
+    if (!el) return;
+    
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) {
+        const p = req.call(el);
+        if (p && p.then) {
+          p.then(() => {
+            if (window.screen.orientation && window.screen.orientation.lock) {
+              window.screen.orientation.lock("landscape").catch(err => {
+                console.log("Orientation lock failed:", err);
+              });
+            }
+          }).catch(err => {
+            console.error("Fullscreen fail:", err);
+          });
+        } else {
+          // iOS Safari fallback
+          setTimeout(() => {
+            if (window.screen.orientation && window.screen.orientation.lock) {
+              window.screen.orientation.lock("landscape").catch(() => {});
+            }
+          }, 300);
+        }
+      }
+    } else {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) {
+        const p = exit.call(document);
+        if (p && p.then) {
+          p.then(() => {
+            if (window.screen.orientation && window.screen.orientation.unlock) {
+              window.screen.orientation.unlock();
+            }
+          }).catch(err => {
+            console.error("Exit fullscreen fail:", err);
+          });
+        } else {
+          if (window.screen.orientation && window.screen.orientation.unlock) {
+            window.screen.orientation.unlock();
+          }
+        }
+      }
+    }
+  };
+
   return (
     <>
       {/* Top Bar */}
@@ -338,9 +515,9 @@ export default function App() {
 
       {/* Hero Panel */}
       <div className="hero-panel">
-        <div className="sphere-container" onClick={initializeRemote}>
+        <div className="sphere-container" onClick={toggleMicrophone}>
           <SphereCanvas
-            state={status}
+            state={getCanvasState()}
             audioAnalyser={audioAnalyser}
             audioDataArray={audioDataArray}
           />
@@ -355,19 +532,45 @@ export default function App() {
             className="hero-status"
             id="hub-state"
             style={{
-              color:
-                status === "THINKING"
-                  ? "rgba(251, 191, 36, 1)"
-                  : status === "LISTENING"
-                  ? "#10b981"
-                  : status === "SPEAKING"
-                  ? "rgba(167, 139, 250, 1)"
-                  : status === "ERROR"
-                  ? "#ef4444"
-                  : "#00e5ff"
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: "8px",
+              textTransform: "uppercase",
+              letterSpacing: "2px",
+              fontSize: "0.72rem",
+              fontWeight: "800"
             }}
           >
-            {status}
+            <span style={{
+              color:
+                pcStatus === "THINKING"
+                  ? "rgba(251, 191, 36, 1)"
+                  : pcStatus === "SPEAKING"
+                  ? "rgba(167, 139, 250, 1)"
+                  : pcStatus === "ERROR"
+                  ? "#ef4444"
+                  : "#00e5ff"
+            }}>
+              PC: {pcStatus}
+            </span>
+            <span style={{ color: "rgba(255,255,255,0.15)" }}>|</span>
+            <span style={{
+              color: isMicActive ? "#10b981" : "#64748b",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px"
+            }}>
+              <span style={{ 
+                display: "inline-block", 
+                width: "6px", 
+                height: "6px", 
+                borderRadius: "50%", 
+                background: isMicActive ? "#10b981" : "#64748b",
+                animation: isMicActive ? "blink 1.5s infinite" : "none"
+              }}></span>
+              MIC: {isMicActive ? "ON" : "MUTED"}
+            </span>
           </div>
           <div className="hero-transcript" id="status-display">
             {lastResponse}
@@ -382,9 +585,52 @@ export default function App() {
         </a>
       </div>
 
+      {/* Screen Feedback Panel */}
+      {screenshot && (
+        <div className="screen-feedback">
+          <div className="screen-feedback-title-bar">
+            <span className="screen-feedback-title">PC Live Screen</span>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span className="screen-feedback-subtitle">Tap screen to click</span>
+              <button 
+                onClick={toggleFullScreen}
+                style={{
+                  background: "rgba(0, 229, 255, 0.1)",
+                  border: "1.5px solid rgba(0, 229, 255, 0.25)",
+                  borderRadius: "8px",
+                  color: "var(--accent)",
+                  fontSize: "0.68rem",
+                  fontWeight: "bold",
+                  padding: "4px 8px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  transition: "all 0.2s"
+                }}
+              >
+                📺 Fullscreen
+              </button>
+            </div>
+          </div>
+          <div 
+            ref={screenImageContainerRef}
+            className="screen-image-container" 
+            onClick={handleScreenClick}
+          >
+            <img 
+              src={`data:image/jpeg;base64,${screenshot}`} 
+              alt="PC Screen" 
+              className="screen-image"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Controls Container */}
       <div className="controls-container" id="controls">
-        <Console onSendCommand={sendCommand} />
+        <Console onSendCommand={sendCommand} isListening={isMicActive} onToggleMic={toggleMicrophone} />
         <Launch onSendCommand={sendCommand} />
         <Macros onSendCommand={sendCommand} />
         <Shortcuts onSendCommand={sendCommand} />

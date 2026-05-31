@@ -1367,6 +1367,48 @@ class BrowserSkill:
         cx = bbox.get('x', 0) + (bbox.get('width', 0) // 2)
         cy = bbox.get('y', 0) + (bbox.get('height', 0) // 2)
         
+        # If it is a card element, try to click the first anchor tag inside it instead
+        if aria_id.startswith("card_"):
+            try:
+                anchor_info = self.page.evaluate(
+                    """([cx, cy]) => {
+                        let el = document.elementFromPoint(cx - window.scrollX, cy - window.scrollY);
+                        if (!el) return null;
+                        let container = el;
+                        while (container && container !== document.body) {
+                            if (container.matches(".s-result-item, ytd-video-renderer, ytd-rich-item-renderer, .result-item") || container.getAttribute("role") === "card" || container.className.includes("card")) {
+                                break;
+                            }
+                            container = container.parentElement;
+                        }
+                        if (!container || container === document.body) {
+                            container = el.closest("[class*='card'], [id*='card'], .s-result-item");
+                        }
+                        if (!container) container = el;
+                        const anchor = container.querySelector("a");
+                        if (anchor) {
+                            const rect = anchor.getBoundingClientRect();
+                            return {
+                                href: anchor.getAttribute("href") || "",
+                                x: Math.round(rect.left + window.scrollX),
+                                y: Math.round(rect.top + window.scrollY),
+                                width: Math.round(rect.width),
+                                height: Math.round(rect.height)
+                            };
+                        }
+                        return null;
+                    }""",
+                    [cx, cy]
+                )
+                if anchor_info:
+                    href = anchor_info.get("href", "")
+                    cx = anchor_info['x'] + (anchor_info['width'] // 2)
+                    cy = anchor_info['y'] + (anchor_info['height'] // 2)
+                    print(f"[Browser] Card click redirected to anchor: {href}")
+                    print(f"[Browser] Clicking anchor center: ({cx}, {cy})")
+            except Exception as e:
+                print(f"[BrowserSkill] Failed to resolve inner anchor tag for card '{aria_id}': {e}")
+
         try:
             self.page.mouse.click(cx, cy)
             print(f"[BrowserSkill] Clicked coordinates ({cx}, {cy}) for target '{aria_id}'.")

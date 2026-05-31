@@ -1613,32 +1613,67 @@ To open VS Code project:    [VSCODE_OPEN: path]
                     # If user_name is not set but we have an image, try to run face recognition first
                     if (not user_name or user_name == "Unknown"):
                         try:
-                            import numpy as np
+                            import sys, numpy as np
                             from skills.memory_manager import MemoryManager
                             mm = MemoryManager()
-                            # Capture a fresh camera image if none was provided
-                            from PIL import Image
-                            img_to_use = image
-                            if img_to_use is None:
-                                # Try to grab it from camera directly
-                                import sys
-                                # Look for running camera instance in sys modules or main
-                                main_mod = sys.modules.get('__main__')
-                                if main_mod and hasattr(main_mod, 'instance') and main_mod.instance and hasattr(main_mod.instance, 'camera'):
-                                    img_to_use = main_mod.instance.camera.capture_image()
-                                elif main_mod and hasattr(main_mod, 'aria_instance') and main_mod.aria_instance and hasattr(main_mod.aria_instance, 'camera'):
-                                    img_to_use = main_mod.aria_instance.camera.capture_image()
-                            
-                            if img_to_use is not None:
-                                img_arr = np.array(img_to_use)
+                            print("[Brain/IdentityIntercept] user_name not set — attempting live face recognition...")
+
+                            img_to_use = image  # PIL Image passed in from caller (may be None)
+                            main_mod = sys.modules.get('__main__')
+                            aria = (
+                                getattr(main_mod, 'instance', None) or
+                                getattr(main_mod, 'aria_instance', None)
+                            ) if main_mod else None
+
+                            # ── Strategy 1: Delegate to ARIA's own _detect_user() ──
+                            # This is the correct, lock-safe, multi-frame method.
+                            if aria and hasattr(aria, '_detect_user'):
+                                try:
+                                    detected_name = aria._detect_user()
+                                    if detected_name and detected_name != "Unknown":
+                                        user_name = detected_name
+                                        user_similarity = getattr(aria, 'known_user_similarity', 0.8)
+                                        user_confidence = getattr(aria, 'known_user_confidence', 'medium')
+                                        print(f"[Brain/IdentityIntercept] _detect_user() identified: '{user_name}' (conf: {user_confidence})")
+                                    else:
+                                        print("[Brain/IdentityIntercept] _detect_user() returned no match.")
+                                except Exception as du_err:
+                                    print(f"[Brain/IdentityIntercept] _detect_user() failed: {du_err}")
+
+                            # ── Strategy 2: Fallback — get a raw BGR frame directly ──
+                            # Use capture_frame_raw() (BGR numpy array) — correct format for FaceEmbedder.
+                            # Do NOT use capture_image() which returns RGB PIL, wrong colour order.
+                            if (not user_name or user_name == "Unknown") and img_to_use is None:
+                                if aria and hasattr(aria, 'camera') and aria.camera.available:
+                                    raw_frame = aria.camera.capture_frame_raw()
+                                    if raw_frame is not None:
+                                        img_to_use = raw_frame  # BGR numpy array
+                                        print(f"[Brain/IdentityIntercept] Got raw BGR frame: {raw_frame.shape}")
+                                    else:
+                                        print("[Brain/IdentityIntercept] capture_frame_raw() returned None — camera may be busy.")
+
+                            # ── Strategy 3: Run identify_user on whatever image we have ──
+                            if (not user_name or user_name == "Unknown") and img_to_use is not None:
+                                img_arr = np.array(img_to_use) if not isinstance(img_to_use, np.ndarray) else img_to_use
+                                print(f"[Brain/IdentityIntercept] Running identify_user on array shape={img_arr.shape}")
                                 detected, sim = mm.identify_user(image_array=img_arr, threshold=0.63, return_confidence=True)
+                                print(f"[Brain/IdentityIntercept] identify_user result: '{detected}' sim={sim:.3f}")
                                 if detected != "Unknown":
                                     user_name = detected
                                     user_similarity = sim
                                     user_confidence = "high" if sim >= 0.85 else "medium" if sim >= 0.75 else "low"
-                                    print(f"[Brain/Identity] Dynamically identified user from camera frame: '{detected}' (similarity: {sim:.3f})")
+                                    # Update the ARIA instance so subsequent requests are faster
+                                    if aria:
+                                        aria.known_user = user_name
+                                        aria.known_user_similarity = user_similarity
+                                        aria.known_user_confidence = user_confidence
+                                    print(f"[Brain/IdentityIntercept] Identified user: '{detected}' (sim={sim:.3f})")
+                            elif not user_name or user_name == "Unknown":
+                                print("[Brain/IdentityIntercept] No image available for face recognition — returning Guest Mode.")
+
                         except Exception as id_err:
-                            print(f"[Brain/Identity] Dynamic face identification failed: {id_err}")
+                            print(f"[Brain/IdentityIntercept] Dynamic face identification failed: {id_err}")
+
                     
                     if user_name and user_name != "Unknown":
                         username_clean = user_name.strip().strip('.').lower()

@@ -99,11 +99,12 @@ class ARPlayground:
     MAX_PARTICLES = 300
     MAX_FLOWERS = 20
 
-    def __init__(self, frame_provider, yolo_model=None, aria_brain=None, aria_speak=None):
+    def __init__(self, frame_provider, yolo_model=None, aria_brain=None, aria_speak=None, aria_instance=None):
         self._frame_provider = frame_provider
         self._yolo_model = yolo_model
         self._aria_brain = aria_brain
         self._aria_speak = aria_speak
+        self._aria_instance = aria_instance
         self._running = False
         self._thread = None
         self._mode = "wand"  # "wand", "flowers", "piano", "pet"
@@ -184,6 +185,11 @@ class ARPlayground:
             self._3d_mode._model_gen = self._model_gen
         return self._3d_mode
 
+    @property
+    def thread(self):
+        return self._thread
+
+
     def _init_sounds(self):
         """Pre-synthesize piano notes and cat sounds."""
         # Initialize mixer if not already done
@@ -248,50 +254,71 @@ class ARPlayground:
                 self._announcer_started = True
                 threading.Thread(target=self._progress_announcer, daemon=True).start()
 
-    def _on_model_ready(self, prompt, path):
-        print(f"[AR3D] Model ready: {prompt}")
-        if self._3d_mode:
-            self._3d_mode.load_model(prompt)
-        if self._aria_speak:
-            self._aria_speak(f"Your {prompt} model is ready. Loading now.")
+    def _on_model_ready(self, prompt, path, is_completed_late=False):
+        print(f"[AR3D] Model ready: {prompt} (late={is_completed_late})")
+        if is_completed_late and self._aria_instance:
+            self._aria_instance.pending_intent_action = {
+                "type": "replace_high_quality_model",
+                "model_key": prompt,
+                "model_path": path,
+                "expires_at": time.time() + 60.0
+            }
+            if self._aria_speak:
+                self._aria_speak(f"Your enhanced {prompt} model is now ready. Would you like to replace the current one?")
+        else:
+            if self._3d_mode:
+                self._3d_mode.load_model(prompt)
+            if self._aria_speak:
+                self._aria_speak(f"Your {prompt} model is ready. Loading now.")
 
     def _progress_announcer(self):
         """Speaks progress at key milestones."""
         announced = set()
         while self._running:
-            if self._model_gen and self._model_gen._generating:
-                p = self._model_gen.progress
-                if p >= 25 and 25 not in announced:
-                    announced.add(25)
-                    if self._aria_speak:
-                        self._aria_speak("25 percent done.")
-                elif p >= 50 and 50 not in announced:
-                    announced.add(50)
-                    if self._aria_speak:
-                        self._aria_speak("Halfway there.")
-                elif p >= 75 and 75 not in announced:
-                    announced.add(75)
-                    if self._aria_speak:
-                        self._aria_speak("Almost ready.")
-                elif p >= 100 and 100 not in announced:
-                    announced.add(100)
+            try:
+                if self._model_gen and self._model_gen._generating:
+                    p = self._model_gen.progress
+                    if p >= 25 and 25 not in announced:
+                        announced.add(25)
+                        if self._aria_speak:
+                            self._aria_speak("25 percent done.")
+                    elif p >= 50 and 50 not in announced:
+                        announced.add(50)
+                        if self._aria_speak:
+                            self._aria_speak("Halfway there.")
+                    elif p >= 75 and 75 not in announced:
+                        announced.add(75)
+                        if self._aria_speak:
+                            self._aria_speak("Almost ready.")
+                    elif p >= 100 and 100 not in announced:
+                        announced.add(100)
+                        announced.clear()
+                else:
                     announced.clear()
-            else:
-                announced.clear()
+            except Exception as announcer_err:
+                print(f"[ARPlayground] Progress announcer error: {announcer_err}")
             time.sleep(2)
 
     def handle_subcommand(self, cmd_name):
         cmd_name = cmd_name.lower().strip()
         if self._mode == "ar3d" and self._3d_mode:
+            # Check for transform actions first to prevent trigger collisions with loading
+            is_transform = any(x in cmd_name for x in ["move", "rotate", "bigger", "smaller", "larger", "zoom", "reset", "center", "wireframe", "explode", "color", "show controls", "controls"])
+            if is_transform:
+                return self._3d_mode.voice_command(cmd_name)
+
             key = match_model(cmd_name)
             if key:
+                if self._3d_mode._current_model_key == key:
+                    self._3d_mode.voice_command("reset")
+                    return f"The {key} model is already loaded. Focusing camera on the model."
+
                 dest_path = os.path.join(_SKILL_DIR, "assets", "3d", f"{key}.obj")
-                if not os.path.exists(dest_path) or os.path.getsize(dest_path) <= 50000:
-                    def generate_in_bg():
-                        print(f"[ARPlayground] Generating 3D model for '{key}' in background...")
-                        self._model_gen.generate(key)
-                        self._on_model_ready(key, dest_path)
-                    threading.Thread(target=generate_in_bg, daemon=True).start()
+                if not os.path.exists(dest_path) or os.path.getsize(dest_path) <= 1000:
+                    print(f"[ARPlayground] Generating 3D model for '{key}' in background...")
+                    def on_ready(path, is_completed_late=False):
+                        self._on_model_ready(key, path, is_completed_late)
+                    self._model_gen.generate(key, callback=on_ready)
                     return f"Generating 3D model for {key} in background. Please wait."
                 else:
                     self._3d_mode.load_model(key)
@@ -337,6 +364,12 @@ class ARPlayground:
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="ARPlayground")
         self._thread.start()
+        
+        # Start progress announcer on start if not already active
+        if not getattr(self, "_announcer_started", False):
+            self._announcer_started = True
+            threading.Thread(target=self._progress_announcer, daemon=True).start()
+
         print("[ARPlayground] Subsystem started.")
         return True
 
@@ -379,11 +412,25 @@ class ARPlayground:
 
             while self._running:
                 t0 = time.time()
-                frame = self._frame_provider()
+                
+                # Check for camera sharing with VisionLearner to avoid lock contention/starvation
+                frame = None
+                if (self._aria_instance and hasattr(self._aria_instance, "vision_learner") 
+                        and self._aria_instance.vision_learner and self._aria_instance.vision_learner.running):
+                    try:
+                        with self._aria_instance.vision_learner._lock:
+                            if self._aria_instance.vision_learner.current_frame is not None:
+                                frame = self._aria_instance.vision_learner.current_frame.copy()
+                    except Exception as frame_err:
+                        print(f"[ARPlayground] Error sharing frame with VisionLearner: {frame_err}")
+                            
+                if frame is None:
+                    frame = self._frame_provider()
 
                 if frame is None:
                     time.sleep(0.03)
                     continue
+
 
                 # ── Aspect Ratio Corrective Cropping & Resizing ──
                 h_orig, w_orig = frame.shape[:2]

@@ -20,8 +20,8 @@ class Voice:
         self._is_speaking_lock = False
         self.recording_active = False
         self.vad_detecting_speech = False
-        self.stt_language = 'en'  # Force English by default to prevent transcription hallucinations
         self.on_speech_detected = None
+        self._shutting_down = False
 
         self.recognizer = sr.Recognizer()
         self.recognizer.pause_threshold = 1.0        # Give user time to breathe
@@ -468,6 +468,8 @@ class Voice:
                 return ''
 
     def _record_audio_chunked(self, source, timeout=3, phrase_time_limit=5):
+        if getattr(self, '_shutting_down', False):
+            return None
         import time as pytime
         import numpy as np
 
@@ -490,6 +492,8 @@ class Voice:
 
         try:
             while True:
+                if getattr(self, '_shutting_down', False):
+                    return None
                 if self.is_speaking:
                     print("[Voice/ChunkedRecord] Aborted recording because ARIA started speaking.")
                     return None
@@ -539,6 +543,8 @@ class Voice:
         return sr.AudioData(all_bytes, sample_rate, sample_width)
 
     def listen(self, timeout=6, phrase_time_limit=12, active_conversation=False):
+        if getattr(self, '_shutting_down', False):
+            return None
         if self.is_speaking:
             print('[Voice] ARIA is speaking. Pausing microphone capture...')
             while self.is_speaking:
@@ -587,6 +593,8 @@ class Voice:
             return None
 
     def listen_for_wake_word(self, wake_words=None, timeout=None):
+        if getattr(self, '_shutting_down', False):
+            return None
         if self.is_speaking:
             return None
         if hasattr(self, 'wake_word_detector') and self.wake_word_detector.is_active():
@@ -670,6 +678,7 @@ class Voice:
             return None
 
     def cleanup(self):
+        self._shutting_down = True
         try:
             if pygame.mixer.get_init():
                 pygame.mixer.music.stop()

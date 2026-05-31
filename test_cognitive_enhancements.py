@@ -76,6 +76,7 @@ class TestReflectionEngine(unittest.TestCase):
     def setUp(self):
         from skills.reflection_engine import ReflectionEngine
         self.re = ReflectionEngine()
+        self.re._session_trust_delta_total = 0.0
         self.test_user = "test_reflection_user"
         # Clean any leftover state from previous runs so defaults tests are reliable
         self._clean_test_user()
@@ -107,9 +108,9 @@ class TestReflectionEngine(unittest.TestCase):
             conn.commit()
         if hasattr(self.re, '_in_memory_metrics') and self.test_user.lower().strip() in self.re._in_memory_metrics:
             del self.re._in_memory_metrics[self.test_user.lower().strip()]
-        self.re.update_relationship_metrics(self.test_user, delta_trust=1.0, delta_comfort=1.0)
+        self.re.update_relationship_metrics(self.test_user, delta_trust=0.5, delta_comfort=1.0)
         vec = self.re.get_relationship_vector(self.test_user)
-        self.assertEqual(vec["trust"], 8.0)
+        self.assertEqual(vec["trust"], 7.5)
         self.assertEqual(vec["comfort"], 6.0)
 
     def test_relationship_labels_acquaintance(self):

@@ -47,3 +47,8 @@ test_vision_shot.png
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Scratch and Cache
+scratch/
+shap_e_model_cache/
+
