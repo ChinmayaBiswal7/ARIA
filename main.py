@@ -150,6 +150,7 @@ class ARIA:
         self.pending_browser_action = None
         self.shopping_search_context = {}
         self.startup_greeting_done = False
+        self.long_session_trust_applied = False
         self._greeted_users = set()
         self._last_greeted_face = None
 
@@ -2901,6 +2902,34 @@ Rules:
             except Exception as norm_err:
                 print(f"[Main] Query normalization failed: {norm_err}")
 
+        # Update relationship metrics based on specific user feedback loops
+        if getattr(self, "known_user", None):
+            has_thanks = any(w in inp for w in ["thank you", "thanks"])
+            has_compliment = any(w in inp for w in ["good job", "nice", "perfect", "that's great"])
+            has_ar = bool(re.search(r'\b(ar|air|hologram|whiteboard)\b', inp))
+            has_polite_correction = any(w in inp for w in ["actually", "i meant", "no, please"]) and not any(w in inp for w in ["stupid", "idiot", "dumb", "useless", "fool", "hate you", "shut up", "trash", "garbage"])
+            has_stop_asking = "stop asking" in inp
+            
+            delta_trust = 0.0
+            if has_thanks:
+                delta_trust += 0.2
+            if has_compliment:
+                delta_trust += 0.2
+            if has_ar:
+                delta_trust += 0.1
+            if has_polite_correction:
+                delta_trust += 0.1
+            if has_stop_asking:
+                delta_trust -= 0.05
+                
+            if delta_trust != 0.0:
+                try:
+                    self.reflection_engine.update_relationship_metrics(self.known_user, delta_trust=delta_trust)
+                    current_trust = self.reflection_engine.get_relationship_vector(self.known_user)["trust"]
+                    print(f"[ARIA] Input-triggered relationship adjustment applied for '{self.known_user}': delta_trust={delta_trust:+.2f}. Current trust: {current_trust:.2f}")
+                except Exception as e:
+                    print(f"[Main] Failed to update relationship metrics for feedback triggers: {e}")
+
         # ── Detect face emotion before responding ──
         emotional_tone = "neutral"
         try:
@@ -5127,6 +5156,14 @@ Rules:
         if startup_user and self.known_user_similarity >= 0.75:
             self.known_user = startup_user
             set_user(startup_user)
+            try:
+                metrics = self.reflection_engine.get_relationship_vector(startup_user)
+                if metrics["trust"] < 10.0:
+                    self.reflection_engine.update_relationship_metrics(startup_user, delta_trust=0.1)
+                    print(f"[ARIA] Passive recovery applied. Trust increased to {self.reflection_engine.get_relationship_vector(startup_user)['trust']:.1f}")
+            except Exception as e:
+                print(f"[ARIA] Failed to apply passive recovery: {e}")
+
             if self.known_user_confidence == "high":
                 greeting = f"Welcome back, {startup_user}! I am ready."
             else:
@@ -5151,6 +5188,15 @@ Rules:
                     print("[ARIA] AR Playground has stopped. Resetting state flags.")
                     self.ar_playground = None
                     self.ar_mode = False
+
+                # Track session duration and apply the +0.3 trust reward when the active session exceeds 15 minutes
+                if getattr(self, "known_user", None) and not getattr(self, "long_session_trust_applied", False) and (time.time() - self.start_time) > 900.0:
+                    self.long_session_trust_applied = True
+                    try:
+                        self.reflection_engine.update_relationship_metrics(self.known_user, delta_trust=0.3)
+                        print(f"[ARIA] Long session trust reward applied for '{self.known_user}'. Trust increased by +0.3 to {self.reflection_engine.get_relationship_vector(self.known_user)['trust']:.1f}")
+                    except Exception as e:
+                        print(f"[ARIA] Failed to apply long session trust reward: {e}")
 
                 # Deliver any pending proactive speech if user is not speaking
                 if hasattr(self, "pending_speech") and self.pending_speech and not self.is_user_speaking():
@@ -5337,6 +5383,13 @@ def main():
             print("[ShutdownCoordinator] Stopping agent loop...")
             aria_instance.running = False
             try:
+                # Commit the in-memory relationship vector state to SQLite only upon clean exit
+                if getattr(aria_instance, "known_user", None):
+                    print(f"[ShutdownCoordinator] Persisting relationship metrics for user '{aria_instance.known_user}'...")
+                    try:
+                        aria_instance.reflection_engine.persist_relationship_metrics(aria_instance.known_user)
+                    except Exception as pe:
+                        print(f"[ShutdownCoordinator] Failed to persist relationship metrics: {pe}")
                 aria_instance.cleanup()
             except Exception as e:
                 print(f"[ShutdownCoordinator] Error during ARIA cleanup: {e}")

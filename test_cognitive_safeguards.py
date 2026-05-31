@@ -38,6 +38,8 @@ class TestCognitiveSafeguards(unittest.TestCase):
         self._clear_test_user()
 
     def _clear_test_user(self):
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user]
         with self.re._get_conn() as conn:
             conn.execute("DELETE FROM relationship_vector WHERE username = ?", (self.test_user,))
             conn.execute("DELETE FROM user_preferences WHERE username = ?", (self.test_user,))
@@ -123,9 +125,11 @@ class TestCognitiveSafeguards(unittest.TestCase):
             conn.execute("""
                 INSERT OR REPLACE INTO relationship_vector 
                 (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
-                VALUES (?, 50.0, 50.0, 50.0, 50.0, ?)
+                VALUES (?, 9.5, 9.5, 9.5, 9.5, ?)
             """, (self.test_user, time.time() - 86400.0 * 2))  # 2 days ago
             conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user]
 
         # Run reflection pass to trigger decay
         self.re._run_reflection(self.test_user, [], [])
@@ -137,7 +141,7 @@ class TestCognitiveSafeguards(unittest.TestCase):
             conn.execute("""
                 INSERT OR REPLACE INTO relationship_vector 
                 (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
-                VALUES (?, 50.0, 50.0, 50.0, 50.0, ?)
+                VALUES (?, 9.5, 9.5, 9.5, 9.5, ?)
             """, (self.test_user, time.time() - 86400.0 * 2))  # 2 days ago
             
             # Add 5 highly confident memories to increase inertia
@@ -147,14 +151,16 @@ class TestCognitiveSafeguards(unittest.TestCase):
                     VALUES (?, ?, ?, ?, 0.9)
                 """, (self.test_user, f"key_{i}", f"val_{i}", time.time()))
             conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user]
 
         # Run reflection pass to trigger decay
         self.re._run_reflection(self.test_user, [], [])
         vec_with_mem = self.re.get_relationship_vector(self.test_user)
 
         # Compare: trust decay with memories should be LESS than trust decay without memories
-        decay_no_mem = 50.0 - vec_no_mem["trust"]
-        decay_with_mem = 50.0 - vec_with_mem["trust"]
+        decay_no_mem = 9.5 - vec_no_mem["trust"]
+        decay_with_mem = 9.5 - vec_with_mem["trust"]
         
         self.assertGreater(decay_no_mem, 0)
         self.assertGreater(decay_with_mem, 0)

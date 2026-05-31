@@ -364,7 +364,7 @@ class CognitiveSandbox:
                 total += 1.0
                 before_val = float(before_rel.get(key, 0.0) or 0.0)
                 after_val = float(after_rel.get(key, 0.0) or 0.0)
-                changes += min(1.0, abs(after_val - before_val) / 100.0)
+                changes += min(1.0, abs(after_val - before_val) / 10.0)
 
         return round(changes / total, 4) if total else 0.0
 

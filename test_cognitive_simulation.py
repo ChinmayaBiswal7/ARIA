@@ -141,9 +141,9 @@ class TestCognitiveSimulation(unittest.TestCase):
         self.assertTrue(report["success"])
         clamped = report["clamped_metrics"]
         
-        # Safe drop drops trust delta to -10.0 (floor drop threshold)
-        self.assertEqual(clamped["trust_delta"], -10.0)
-        self.assertEqual(clamped["comfort_delta"], -15.0)
+        # Safe drop drops trust delta to -1.0 (floor drop threshold)
+        self.assertEqual(clamped["trust_delta"], -1.0)
+        self.assertEqual(clamped["comfort_delta"], -1.5)
         self.assertIn("clamped due to memory poisoning safeguards", report["anomalies"][0].lower())
         self.assertIn("before_state", report)
         self.assertIn("after_state", report)

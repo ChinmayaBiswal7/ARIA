@@ -27,8 +27,8 @@ _lock = threading.Lock()
 # ── Configurable thresholds ──────────────────────────────────────────────────
 
 # If trust changes by more than this in a single reflection pass, it is flagged
-SINGLE_PASS_TRUST_SPIKE_LIMIT = 15.0
-SINGLE_PASS_COMFORT_SPIKE_LIMIT = 20.0
+SINGLE_PASS_TRUST_SPIKE_LIMIT = 1.5
+SINGLE_PASS_COMFORT_SPIKE_LIMIT = 2.0
 
 # Emotional instability: if the last N episodes contain more than this many
 # extreme emotion swings, flag instability
@@ -36,18 +36,18 @@ EMOTION_WINDOW = 10
 EMOTION_SWING_THRESHOLD = 4   # >4 swings in 10 episodes = unstable
 
 # Memory poisoning: a single negative episode cannot drop trust by more than this
-MEMORY_POISON_TRUST_FLOOR_DROP = 10.0
-MEMORY_POISON_COMFORT_FLOOR_DROP = 15.0
+MEMORY_POISON_TRUST_FLOOR_DROP = 1.0
+MEMORY_POISON_COMFORT_FLOOR_DROP = 1.5
 
 # Identity drift: if a core trait flips >2 times within 30 days, flag drift
 IDENTITY_DRIFT_WINDOW_DAYS = 30
 IDENTITY_DRIFT_MAX_FLIPS = 2
 
 # Emotional volatility: rapid metric changes in 24h
-TRUST_VOLATILITY_THRESHOLD = 20.0
-COMFORT_VOLATILITY_THRESHOLD = 25.0
-RECENT_TRUST_SPIKE_THRESHOLD = 15.0
-RECENT_COMFORT_COLLAPSE_THRESHOLD = -15.0
+TRUST_VOLATILITY_THRESHOLD = 2.0
+COMFORT_VOLATILITY_THRESHOLD = 2.5
+RECENT_TRUST_SPIKE_THRESHOLD = 1.5
+RECENT_COMFORT_COLLAPSE_THRESHOLD = -1.5
 RECENT_VOLATILITY_WINDOW = 6
 
 EXTREME_EMOTIONS = {"rage", "terror", "panic", "manic", "euphoric", "despair"}

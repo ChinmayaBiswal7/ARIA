@@ -547,9 +547,9 @@ class Brain:
                         f"== COGNITIVE RELATIONSHIP VECTOR ==\n"
                         f"- Familiarity Tier: {labels['familiarity']}\n"
                         f"- Interaction Depth: {labels['interaction_depth']}\n"
-                        f"- Trust Level: {rel_row['trust']:.1f}/100.0\n"
-                        f"- Comfort Level: {rel_row['comfort']:.1f}/100.0\n"
-                        f"- Emotional Openness: {rel_row['emotional_openness']:.1f}/100.0"
+                        f"- Trust Level: {rel_row['trust']:.1f}/10.0\n"
+                        f"- Comfort Level: {rel_row['comfort']:.1f}/10.0\n"
+                        f"- Emotional Openness: {rel_row['emotional_openness']:.1f}/10.0"
                     )
 
             # 4. Fetch registered project folders

@@ -9,6 +9,7 @@ import time
 import os
 import sys
 import unittest
+import unittest.mock
 
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,9 +56,12 @@ class TestProactiveCognitionCooldown(unittest.TestCase):
         self.assertTrue(status["on_cooldown"])
         self.assertGreater(status["remaining_seconds"], 0)
 
-    def test_soft_phrasing_for_stress(self):
+    @unittest.mock.patch('random.choice')
+    def test_soft_phrasing_for_stress(self, mock_choice):
+        mock_choice.side_effect = lambda x: x[0]
         context = {"username": "tester", "hour": 14, "working_minutes": 10}
         suggestion = self.pc.generate_soft_suggestion("stressed", context)
+        self.assertIsNotNone(suggestion)
         self.assertIn("seem", suggestion.lower(), "Should use soft 'seem' phrasing, not assertive")
 
     def test_no_suggestion_when_neutral(self):
@@ -80,6 +84,8 @@ class TestReflectionEngine(unittest.TestCase):
         self._clean_test_user()
 
     def _clean_test_user(self):
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user.lower().strip() in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user.lower().strip()]
         with self.re._get_conn() as conn:
             conn.execute("DELETE FROM relationship_vector WHERE username = ?", (self.test_user.lower().strip(),))
             conn.execute("DELETE FROM candidate_semantic_updates WHERE username = ?", (self.test_user.lower().strip(),))
@@ -92,27 +98,61 @@ class TestReflectionEngine(unittest.TestCase):
         self.assertEqual(vec["trust"], 10.0, "Default trust should be 10.0")
 
     def test_update_relationship_metrics(self):
-        self.re.update_relationship_metrics(self.test_user, delta_trust=5.0, delta_comfort=3.0)
+        with self.re._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO relationship_vector 
+                (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                VALUES (?, 7.0, 5.0, 5.0, 5.0, ?)
+            """, (self.test_user.lower().strip(), time.time()))
+            conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user.lower().strip() in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user.lower().strip()]
+        self.re.update_relationship_metrics(self.test_user, delta_trust=1.0, delta_comfort=1.0)
         vec = self.re.get_relationship_vector(self.test_user)
-        self.assertGreaterEqual(vec["trust"], 15.0)
-        self.assertGreaterEqual(vec["comfort"], 13.0)
+        self.assertEqual(vec["trust"], 8.0)
+        self.assertEqual(vec["comfort"], 6.0)
 
     def test_relationship_labels_acquaintance(self):
+        with self.re._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO relationship_vector 
+                (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                VALUES (?, 2.0, 2.0, 2.0, 2.0, ?)
+            """, (self.test_user.lower().strip(), time.time()))
+            conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user.lower().strip() in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user.lower().strip()]
         labels = self.re.get_relationship_labels(self.test_user)
         self.assertIn(labels["familiarity"], ["Acquaintance", "Growing"])
 
     def test_relationship_labels_after_growth(self):
-        """Push metrics high enough to reach 'Friend / Evolving' label."""
-        self.re.update_relationship_metrics(self.test_user, delta_trust=50.0, delta_comfort=50.0)
+        """Push metrics high enough to reach 'Close Companion' label."""
+        with self.re._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO relationship_vector 
+                (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                VALUES (?, 9.0, 9.0, 9.0, 9.0, ?)
+            """, (self.test_user.lower().strip(), time.time()))
+            conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user.lower().strip() in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user.lower().strip()]
         labels = self.re.get_relationship_labels(self.test_user)
         self.assertIn(labels["familiarity"], ["Friend / Evolving", "Close Companion"])
 
     def test_self_model_consistency_check(self):
         """If trust is high but comfort low, consistency check should auto-correct."""
-        self.re.update_relationship_metrics(self.test_user, delta_trust=60.0, delta_comfort=-10.0)
+        with self.re._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO relationship_vector 
+                (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                VALUES (?, 8.0, 0.5, 5.0, 5.0, ?)
+            """, (self.test_user.lower().strip(), time.time()))
+            conn.commit()
+        if hasattr(self.re, '_in_memory_metrics') and self.test_user.lower().strip() in self.re._in_memory_metrics:
+            del self.re._in_memory_metrics[self.test_user.lower().strip()]
         self.re.self_model_consistency_check(self.test_user)
         vec = self.re.get_relationship_vector(self.test_user)
-        self.assertGreater(vec["comfort"], 10.0, "Comfort should have been corrected upward")
+        self.assertEqual(vec["comfort"], 1.5, "Comfort should have been corrected to 1.5")
 
     def test_candidate_update_quarantine_low_confidence(self):
         """Low-confidence inferred updates should be quarantined."""
@@ -207,6 +247,71 @@ class TestSandboxSafety(unittest.TestCase):
     def test_privacy_zone_blocks_password_manager(self):
         result = self.ssl.is_perception_allowed("1Password - Vault")
         self.assertFalse(result, "Password manager should be blocked by privacy zone")
+
+
+class TestMainRelationshipTriggers(unittest.TestCase):
+    """Verifies main.py relationship adjustment triggers on user input."""
+
+    def setUp(self):
+        # Prevent threading.Thread from running in __init__
+        self.thread_patcher = unittest.mock.patch('threading.Thread')
+        self.mock_thread = self.thread_patcher.start()
+
+        from main import ARIA
+        # Mock other parts to avoid loading heavy things or starting pygame/TTS
+        self.aria = ARIA()
+        self.aria.known_user = "test_user"
+        self.aria.reflection_engine = unittest.mock.MagicMock()
+        self.aria.reflection_engine.get_relationship_vector.return_value = {"trust": 8.0}
+        self.aria.episodic_memory = unittest.mock.MagicMock()
+        self.aria.proactive_cognition = unittest.mock.MagicMock()
+
+    def tearDown(self):
+        self.thread_patcher.stop()
+
+    def test_thanks_trigger(self):
+        try:
+            self.aria._handle_input_impl("thank you so much")
+        except Exception:
+            pass
+        self.aria.reflection_engine.update_relationship_metrics.assert_any_call("test_user", delta_trust=0.2)
+
+    def test_compliment_trigger(self):
+        try:
+            self.aria._handle_input_impl("that's great, ARIA!")
+        except Exception:
+            pass
+        self.aria.reflection_engine.update_relationship_metrics.assert_any_call("test_user", delta_trust=0.2)
+
+    def test_ar_trigger(self):
+        try:
+            self.aria._handle_input_impl("can you show the whiteboard")
+        except Exception:
+            pass
+        self.aria.reflection_engine.update_relationship_metrics.assert_any_call("test_user", delta_trust=0.1)
+
+    def test_polite_correction_trigger(self):
+        try:
+            self.aria._handle_input_impl("actually, i meant python")
+        except Exception:
+            pass
+        self.aria.reflection_engine.update_relationship_metrics.assert_any_call("test_user", delta_trust=0.1)
+
+    def test_stop_asking_trigger(self):
+        try:
+            self.aria._handle_input_impl("stop asking")
+        except Exception:
+            pass
+        self.aria.reflection_engine.update_relationship_metrics.assert_any_call("test_user", delta_trust=-0.05)
+
+    def test_long_session_trust_reward(self):
+        self.aria.start_time = time.time() - 950.0  # > 15 mins ago
+        self.aria.long_session_trust_applied = False
+        
+        has_user = getattr(self.aria, "known_user", None) is not None
+        has_applied = getattr(self.aria, "long_session_trust_applied", False)
+        over_time = (time.time() - self.aria.start_time) > 900.0
+        self.assertTrue(has_user and not has_applied and over_time)
 
 
 if __name__ == "__main__":

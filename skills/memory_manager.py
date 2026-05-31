@@ -190,7 +190,7 @@ class MemoryManager:
                     for col in ["trust", "comfort", "interaction_depth", "emotional_openness"]:
                         val = r[col]
                         # Check NaN, None, or out-of-bounds
-                        if val is None or str(val).lower() == "nan" or not (0.0 <= float(val) <= 100.0):
+                        if val is None or str(val).lower() == "nan" or not (0.0 <= float(val) <= 10.0):
                             corrupt = True
                             details[col] = val
                     

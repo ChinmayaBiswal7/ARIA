@@ -83,6 +83,11 @@ class ReflectionEngine:
 
     def get_relationship_vector(self, username: str) -> Dict[str, float]:
         username = username.lower().strip()
+        if not hasattr(self, '_in_memory_metrics'):
+            self._in_memory_metrics = {}
+        if username in self._in_memory_metrics:
+            return self._in_memory_metrics[username]
+
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT trust, comfort, interaction_depth, emotional_openness FROM relationship_vector WHERE username = ?",
@@ -90,40 +95,56 @@ class ReflectionEngine:
             ).fetchone()
         
         if row:
-            return dict(row)
+            metrics = dict(row)
+        else:
+            # Insert defaults once in DB
+            now = time.time()
+            with _lock:
+                with self._get_conn() as conn:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO relationship_vector 
+                           (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                           VALUES (?, 10.0, 10.0, 10.0, 10.0, ?)""",
+                        (username, now)
+                    )
+                    conn.commit()
+            metrics = {"trust": 10.0, "comfort": 10.0, "interaction_depth": 10.0, "emotional_openness": 10.0}
         
-        # Insert defaults
-        now = time.time()
-        with _lock:
-            with self._get_conn() as conn:
-                conn.execute(
-                    """INSERT OR IGNORE INTO relationship_vector 
-                       (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
-                       VALUES (?, 10.0, 10.0, 10.0, 10.0, ?)""",
-                    (username, now)
-                )
-                conn.commit()
-        return {"trust": 10.0, "comfort": 10.0, "interaction_depth": 10.0, "emotional_openness": 10.0}
+        self._in_memory_metrics[username] = metrics
+        return metrics
 
-    def update_relationship_metrics(self, username: str, delta_trust: float = 0.0, delta_comfort: float = 0.0, delta_depth: float = 0.0, delta_openness: float = 0.0):
+    def update_relationship_metrics(self, username: str, delta_trust: float = 0.0, delta_comfort: float = 0.0, delta_depth: float = 0.0, delta_openness: float = 0.0, hostile: bool = False):
         username = username.lower().strip()
         metrics = self.get_relationship_vector(username)
         
-        new_trust = max(0.0, min(100.0, metrics["trust"] + delta_trust))
-        new_comfort = max(0.0, min(100.0, metrics["comfort"] + delta_comfort))
-        new_depth = max(0.0, min(100.0, metrics["interaction_depth"] + delta_depth))
-        new_openness = max(0.0, min(100.0, metrics["emotional_openness"] + delta_openness))
+        # Enforce trust floor of 7.0 (under normal circumstances, but 0.0 if hostile)
+        floor = 0.0 if hostile else 7.0
+        new_trust = max(floor, min(10.0, metrics["trust"] + delta_trust))
+        new_comfort = max(0.0, min(10.0, metrics["comfort"] + delta_comfort))
+        new_depth = max(0.0, min(10.0, metrics["interaction_depth"] + delta_depth))
+        new_openness = max(0.0, min(10.0, metrics["emotional_openness"] + delta_openness))
         
-        now = time.time()
-        with _lock:
-            with self._get_conn() as conn:
-                conn.execute(
-                    """INSERT OR REPLACE INTO relationship_vector
-                       (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (username, new_trust, new_comfort, new_depth, new_openness, now)
-                )
-                conn.commit()
+        metrics["trust"] = new_trust
+        metrics["comfort"] = new_comfort
+        metrics["interaction_depth"] = new_depth
+        metrics["emotional_openness"] = new_openness
+
+    def persist_relationship_metrics(self, username: str):
+        """Save the in-memory relationship metrics to SQLite database. Call on clean shutdown."""
+        username = username.lower().strip()
+        if hasattr(self, '_in_memory_metrics') and username in self._in_memory_metrics:
+            metrics = self._in_memory_metrics[username]
+            now = time.time()
+            with _lock:
+                with self._get_conn() as conn:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO relationship_vector
+                           (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (username, metrics["trust"], metrics["comfort"], metrics["interaction_depth"], metrics["emotional_openness"], now)
+                    )
+                    conn.commit()
+            print(f"[ReflectionEngine] Persisted relationship metrics for user '{username}': {metrics}")
 
     def get_relationship_labels(self, username: str) -> Dict[str, str]:
         """Provides human-readable soft labels for dashboard mapping."""
@@ -131,20 +152,20 @@ class ReflectionEngine:
         
         # Soft label for familiarity (combination of trust & comfort)
         fam_score = (metrics["trust"] + metrics["comfort"]) / 2.0
-        if fam_score >= 80.0:
+        if fam_score >= 8.0:
             fam_label = "Close Companion"
-        elif fam_score >= 50.0:
+        elif fam_score >= 5.0:
             fam_label = "Friend / Evolving"
-        elif fam_score >= 25.0:
+        elif fam_score >= 2.5:
             fam_label = "Growing"
         else:
             fam_label = "Acquaintance"
             
         # Soft label for interaction depth
         depth = metrics["interaction_depth"]
-        if depth >= 75.0:
+        if depth >= 7.5:
             depth_label = "Deep"
-        elif depth >= 40.0:
+        elif depth >= 4.0:
             depth_label = "Medium"
         else:
             depth_label = "Surface-level"
@@ -330,11 +351,11 @@ class ReflectionEngine:
                         elapsed_days = elapsed_seconds / 86400.0
                         
                         # 1% trust decay
-                        delta_trust = -1.0 * elapsed_days * inertia
+                        delta_trust = -0.1 * elapsed_days * inertia
                         # 3% other metrics decay
-                        delta_comfort = -3.0 * elapsed_days * inertia
-                        delta_depth = -3.0 * elapsed_days * inertia
-                        delta_openness = -3.0 * elapsed_days * inertia
+                        delta_comfort = -0.3 * elapsed_days * inertia
+                        delta_depth = -0.3 * elapsed_days * inertia
+                        delta_openness = -0.3 * elapsed_days * inertia
 
                         print(f"[ReflectionEngine] Applying relationship decay for '{username}' (inertia: {inertia:.2f}, days: {elapsed_days:.2f})")
                         self.update_relationship_metrics(
@@ -356,18 +377,18 @@ class ReflectionEngine:
 
         # 3. Update relationship metrics based on recent interaction sentiments
         sentiment_delta = 0.0
-        depth_delta = 0.5 # Speaking increases depth
+        depth_delta = 0.05 # Speaking increases depth
         
         for ep in recent_episodes:
             emo = ep.get("emotion", "neutral")
             if emo in ["happy", "excited"]:
-                sentiment_delta += 0.5
+                sentiment_delta += 0.05
             elif emo in ["stressed", "anxious", "sad"]:
-                sentiment_delta -= 0.1
+                sentiment_delta -= 0.01
                 
         # Raw deltas before memory poisoning clamping
-        raw_trust_change = max(-5.0, min(5.0, sentiment_delta))
-        raw_comfort_change = max(-5.0, min(5.0, sentiment_delta * 0.5))
+        raw_trust_change = max(-0.5, min(0.5, sentiment_delta))
+        raw_comfort_change = max(-0.5, min(0.5, sentiment_delta * 0.5))
 
         # Memory Poisoning Resistance: clamp per-pass deltas via SelfModelValidator
         try:
@@ -380,12 +401,21 @@ class ReflectionEngine:
             print(f"[ReflectionEngine] SelfModelValidator unavailable: {_smv_err}")
             bounded_trust_change, bounded_comfort_change = raw_trust_change, raw_comfort_change
 
+        # Check if user interactions are hostile
+        hostile = False
+        for ep in recent_episodes:
+            text = ep.get("event_text", "").lower()
+            if any(w in text for w in ["stupid", "idiot", "dumb", "useless", "fool", "hate you", "shut up", "trash", "garbage"]):
+                hostile = True
+                break
+
         self.update_relationship_metrics(
             username=username,
             delta_trust=bounded_trust_change,
             delta_comfort=bounded_comfort_change,
             delta_depth=depth_delta,
-            delta_openness=0.2 if sentiment_delta > 0 else 0.0
+            delta_openness=0.02 if sentiment_delta > 0 else 0.0,
+            hostile=hostile
         )
         
         # 4. Strategy reinforcement weight updates
@@ -509,36 +539,30 @@ class ReflectionEngine:
         username = username.lower().strip()
         metrics = self.get_relationship_vector(username)
         
-        # 1. Enforce strict boundaries [0.0, 100.0]
-        trust = max(0.0, min(100.0, metrics["trust"]))
-        comfort = max(0.0, min(100.0, metrics["comfort"]))
-        depth = max(0.0, min(100.0, metrics["interaction_depth"]))
-        openness = max(0.0, min(100.0, metrics["emotional_openness"]))
+        # 1. Enforce strict boundaries [0.0, 10.0]
+        trust = max(0.0, min(10.0, metrics["trust"]))
+        comfort = max(0.0, min(10.0, metrics["comfort"]))
+        depth = max(0.0, min(10.0, metrics["interaction_depth"]))
+        openness = max(0.0, min(10.0, metrics["emotional_openness"]))
 
-        # 2. Scale down comfort & openness if trust is low (prevents incoherent personality signals)
-        if trust < 20.0:
-            if comfort > trust or openness > trust:
-                comfort = min(comfort, trust)
-                openness = min(openness, trust)
+        # 2. Scale down comfort & openness if trust is low
+        if trust < 3.0:
+            if comfort > max(3.0, trust) or openness > max(3.0, trust):
+                comfort = min(comfort, max(3.0, trust))
+                openness = min(openness, max(3.0, trust))
                 print(f"[ReflectionEngine] Consistency Check: Trust is critically low ({trust:.1f}). Comfort/Openness capped to prevent identity fragmentation.")
 
         # 3. Correct trust vs comfort discrepancy
-        if trust > 50.0 and comfort < 15.0:
-            comfort = 15.0
+        if trust > 5.0 and comfort < 1.5:
+            comfort = 1.5
             print("[ReflectionEngine] Consistency Check: Trust is high but comfort is low. Adjusting comfort upward to prevent fragmentation.")
 
-        # Update if changed
+        # Update if changed in-memory
         if trust != metrics["trust"] or comfort != metrics["comfort"] or depth != metrics["interaction_depth"] or openness != metrics["emotional_openness"]:
-            now = time.time()
-            with _lock:
-                with self._get_conn() as conn:
-                    conn.execute(
-                        """INSERT OR REPLACE INTO relationship_vector
-                           (username, trust, comfort, interaction_depth, emotional_openness, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (username, trust, comfort, depth, openness, now)
-                    )
-                    conn.commit()
+            metrics["trust"] = trust
+            metrics["comfort"] = comfort
+            metrics["interaction_depth"] = depth
+            metrics["emotional_openness"] = openness
 
     # ── Task Replay File Storage ──────────────────────────────────────────
 
