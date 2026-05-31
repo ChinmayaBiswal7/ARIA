@@ -119,7 +119,17 @@ class AR3DMode:
     def stop(self):
         self._running = False
         self._queue_cmd("quit")
+        # Free any active cloud temp file
+        _active_tmp = getattr(self, "_active_tmp_path", None)
+        if _active_tmp:
+            try:
+                from skills.model_cloud_manager import ModelCloudManager
+                ModelCloudManager().free_temp(_active_tmp)
+            except Exception:
+                pass
+            self._active_tmp_path = None
         print("[AR3D] Viewer stopped.")
+
 
     def load_model(self, model_key):
         """Queue a model load by keyword."""
@@ -263,12 +273,39 @@ class AR3DMode:
                     break
                 elif cmd.startswith("load:"):
                     key = cmd.split(":", 1)[1]
-                    obj_path = os.path.join(
-                        os.path.dirname(os.path.abspath(__file__)),
-                        "assets", "3d", f"{key}.obj"
-                    )
+
+                    # \u2500\u2500 1. Try cloud stream first (no permanent disk use) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                    obj_path = None
+                    _active_tmp = getattr(self, "_active_tmp_path", None)
                     try:
-                        if os.path.exists(obj_path):
+                        from skills.model_cloud_manager import ModelCloudManager
+                        mcm = ModelCloudManager()
+                        if mcm.is_available(key):
+                            tmp = mcm.stream_to_temp(key)
+                            if tmp:
+                                obj_path = str(tmp)
+                                # Free previous temp if there was one
+                                if _active_tmp:
+                                    mcm.free_temp(_active_tmp)
+                                self._active_tmp_path = tmp
+                                print(f"[AR3D] Cloud stream ready: {tmp}")
+                    except Exception as cloud_err:
+                        print(f"[AR3D] Cloud stream skipped: {cloud_err}")
+
+                    # \u2500\u2500 2. Fall back to local assets folder \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                    if not obj_path:
+                        local = os.path.join(
+                            os.path.dirname(os.path.abspath(__file__)),
+                            "assets", "3d", f"{key}.obj"
+                        )
+                        if os.path.exists(local):
+                            obj_path = local
+                            print(f"[AR3D] Loading from local disk: {local}")
+                        else:
+                            print(f"[AR3D] No local file for '{key}' either \u2014 using procedural sphere.")
+
+                    try:
+                        if obj_path:
                             new_mesh = vedo.load(obj_path)
                         else:
                             new_mesh = vedo.Sphere(r=1)
@@ -285,6 +322,7 @@ class AR3DMode:
                         print(f"[AR3D] Model loaded: {key}")
                     except Exception as e:
                         import traceback; traceback.print_exc()
+
                 elif cmd.startswith("color:"):
                     color_name = cmd.split(":", 1)[1]
                     parts = assembly[0].unpack() if hasattr(assembly[0], "unpack") else [assembly[0]]

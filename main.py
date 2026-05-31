@@ -165,6 +165,7 @@ class ARIA:
         self.airtouch_mode = False
         self.ar_playground = None
         self.ar_mode = False
+        self._dismissed_goals = set()  # Goals dismissed this session — never re-surface
 
     def initialize(self):
         print("\n" + "="*50)
@@ -361,21 +362,27 @@ class ARIA:
                     session = json.load(sf)
                 if session.get("status") == "active" and session.get("goal"):
                     goal = session["goal"]
-                    print(f"[ARIA Session] Found active unfinished goal: {goal}")
-                    
-                    def ask_resume():
-                        time.sleep(3.0)  # Wait for GUI/Audio to load
-                        self._speak(f"I found an unfinished task from your last session: '{goal}'. Should I resume it?")
-                        feedback = self.voice.listen(timeout=8)
-                        if feedback and any(x in feedback.lower() for x in ["yes", "resume", "go ahead", "sure", "ok", "okay"]):
-                            self._speak("Resuming task now.")
-                            threading.Thread(target=self.run_autonomous_agent, args=(goal,), daemon=True).start()
-                        else:
-                            self._speak("Task cleared.")
-                            if os.path.exists("active_session.json"):
-                                os.remove("active_session.json")
-                                
-                    threading.Thread(target=ask_resume, daemon=True).start()
+                    # Skip if already dismissed this session
+                    if goal in self._dismissed_goals:
+                        print(f"[ARIA Session] Goal '{goal}' was already dismissed this session. Skipping.")
+                    else:
+                        print(f"[ARIA Session] Found active unfinished goal: {goal}")
+                        
+                        def ask_resume():
+                            time.sleep(3.0)  # Wait for GUI/Audio to load
+                            self._speak(f"I found an unfinished task from your last session: '{goal}'. Should I resume it?")
+                            feedback = self.voice.listen(timeout=8)
+                            if feedback and any(x in feedback.lower() for x in ["yes", "resume", "go ahead", "sure", "ok", "okay"]):
+                                self._speak("Resuming task now.")
+                                threading.Thread(target=self.run_autonomous_agent, args=(goal,), daemon=True).start()
+                            else:
+                                # User said no/later — dismiss for this session
+                                self._dismissed_goals.add(goal)
+                                self._speak("Task cleared.")
+                                if os.path.exists("active_session.json"):
+                                    os.remove("active_session.json")
+                                    
+                        threading.Thread(target=ask_resume, daemon=True).start()
         except Exception as e:
             print(f"[ARIA Session] Checkpoint check failed: {e}")
         mode_str = "Always-On" if self.wake_mode else "Wake-Word"
@@ -971,13 +978,21 @@ class ARIA:
             time.sleep(0.03)
             
         if not embeddings:
-            # Face disappeared / no face seen -> clear identity
+            # Face disappeared / no face seen — use grace period before clearing identity
+            # so brief look-aways or lighting glitches don't reset user context
+            FACE_LOSS_GRACE_SECONDS = 30.0
+            now_t = time.time()
+            last_seen = getattr(self, "_face_last_seen_time", 0.0)
             if self.known_user and self.known_user != "Unknown":
-                print(f"[Main] No face detected. Clearing active user '{self.known_user}'.")
-                self.known_user = None
-                self.known_user_confidence = "none"
-                self.known_user_similarity = 0.0
-                self.face_match_history = []
+                if (now_t - last_seen) > FACE_LOSS_GRACE_SECONDS:
+                    print(f"[Main] No face detected for {FACE_LOSS_GRACE_SECONDS:.0f}s. Clearing active user '{self.known_user}'.")
+                    self.known_user = None
+                    self.known_user_confidence = "none"
+                    self.known_user_similarity = 0.0
+                    self.face_match_history = []
+                else:
+                    remaining = FACE_LOSS_GRACE_SECONDS - (now_t - last_seen)
+                    print(f"[Main] No face detected — holding context for '{self.known_user}' ({remaining:.0f}s grace remaining).")
             return None
             
         # 3. Compute averaged embedding vector
@@ -1016,6 +1031,7 @@ class ARIA:
                 # Classify confidence based on boosted similarity
                 self.known_user = name
                 self.known_user_similarity = similarity
+                self._face_last_seen_time = time.time()  # Update grace period timestamp
                 if similarity >= 0.85:
                     self.known_user_confidence = "high"
                     self.last_identity_match_time = time.time()
@@ -4575,7 +4591,8 @@ Rules:
             return
 
         # ─ Route sub-commands to AR Playground if it's currently running ─
-        if getattr(self, 'ar_mode', False) and getattr(self, 'ar_playground', None):
+        ar_playground_active = getattr(self, 'ar_mode', False) or getattr(self, 'ar_playground', None) is not None
+        if ar_playground_active and getattr(self, 'ar_playground', None):
             if any(x in inp for x in ["clear board", "clear canvas", "clear whiteboard"]):
                 self.ar_playground.handle_subcommand("clear_board")
                 self._speak("Board cleared.")
@@ -4601,6 +4618,29 @@ Rules:
                 if res:
                     self._speak(res)
                 return
+            elif any(p in inp for p in [
+                "load the", "show me the model", "show the model", "show me the",
+                "load model", "display the", "put up the", "put the"
+            ]):
+                # Extract the model keyword — use cached key if we have one
+                model_key = getattr(self, "_last_model_key", None)
+                for word in inp.split():
+                    cleaned = word.strip(".,!?")
+                    if cleaned in ["dragon", "bunny", "car", "spaceship", "robot", "teapot",
+                                   "lamborghini", "armadillo", "cow", "crystal", "helmet",
+                                   "earth", "planet", "dna", "torus", "solar"]:
+                        model_key = cleaned
+                        self._last_model_key = model_key
+                        break
+                if model_key:
+                    res = self.ar_playground.handle_subcommand(f"load the {model_key}")
+                    if res:
+                        self._speak(res)
+                else:
+                    res = self.ar_playground.handle_subcommand(inp)
+                    if res:
+                        self._speak(res)
+                return
             elif any(p in inp for p in ["is the model ready", "is the 3d model ready", "model ready"]):
                 is_gen = False
                 if hasattr(self.ar_playground, '_model_gen') and self.ar_playground._model_gen:
@@ -4620,6 +4660,23 @@ Rules:
                 if res:
                     self._speak(res)
                 return
+            else:
+                # Last resort: try match_model() — catches bare names like
+                # "dragon", "create dragon", "load dragon", "show dragon" etc.
+                try:
+                    from skills.ar_3d_mode import match_model
+                    key = match_model(inp)
+                    if key:
+                        self._last_model_key = key
+                        res = self.ar_playground.handle_subcommand(inp)
+                        if res:
+                            self._speak(res)
+                        else:
+                            self._speak(f"Loading {key}...")
+                        return
+                except Exception:
+                    pass
+                # Nothing matched — fall through to general chat
 
         # ─ AR Playground Mode selection & auto-start ─
         # List of explicit AR triggers to start the playground and switch mode
@@ -5362,8 +5419,12 @@ def main():
         venv_python = os.path.join(script_dir, 'aria_env', 'Scripts', 'python.exe')
         if os.path.exists(venv_python):
             print(f"[ARIA Venv Guard] Running on system Python. Auto-restarting inside virtual environment: {venv_python}")
-            result = subprocess.run([venv_python] + sys.argv)
-            sys.exit(result.returncode)
+            try:
+                result = subprocess.run([venv_python] + sys.argv)
+                sys.exit(result.returncode)
+            except KeyboardInterrupt:
+                # Ctrl+C in venv child — exit cleanly without traceback
+                sys.exit(0)
 
     aria_instance = None
     qt_app = None
@@ -5410,9 +5471,18 @@ def main():
                 print(f"[ShutdownCoordinator] Error quitting Qt App: {e}")
 
         print("[ShutdownCoordinator] Graceful shutdown completed successfully. Exiting process.")
+
+        # Free any cloud model temp files that were active
+        try:
+            from skills.model_cloud_manager import ModelCloudManager
+            ModelCloudManager().free_all_temps()
+        except Exception:
+            pass
+
         # Force exit to ensure stuck threads or uvicorn loop doesn't stall process
         import os
         os._exit(0)
+
 
     # Register the SIGINT handler
     signal.signal(signal.SIGINT, shutdown_gracefully)

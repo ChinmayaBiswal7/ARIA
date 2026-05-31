@@ -702,6 +702,28 @@ class SelfModelValidator:
             f"[SelfModelValidator] Validation complete for '{username}': "
             f"status={status}, issues={issues_total}"
         )
+        if status != "OK":
+            if trait_conflicts:
+                print(f"[SelfModelValidator]   - Trait conflicts ({len(trait_conflicts)}): "
+                      + ", ".join(f"{c['key_a']}={c['val_a']} vs {c['key_b']}={c['val_b']}" for c in trait_conflicts))
+            if emotional_instability:
+                print(f"[SelfModelValidator]   - Emotional instability: True")
+            if identity_drift:
+                for d in identity_drift:
+                    print(f"[SelfModelValidator]   - Identity drift on '{d['trait']}': "
+                          f"{d['flip_count']} flips | history={d.get('history', [])[-5:]}")
+            if emotional_volatility.get("trust_volatile"):
+                print(f"[SelfModelValidator]   - Trust volatility: delta={emotional_volatility['trust_delta_24h']:+.2f} in 24h")
+            if emotional_volatility.get("comfort_volatile"):
+                print(f"[SelfModelValidator]   - Comfort volatility: delta={emotional_volatility['comfort_delta_24h']:+.2f} in 24h")
+            if emotional_volatility.get("trust_spike_detected"):
+                print(f"[SelfModelValidator]   - Trust spike: max_jump={emotional_volatility['max_recent_trust_jump']:+.2f}")
+            if emotional_volatility.get("comfort_collapse_detected"):
+                print(f"[SelfModelValidator]   - Comfort collapse: max_drop={emotional_volatility['max_recent_comfort_drop']:+.2f}")
+            if long_term_coherence:
+                for w in long_term_coherence:
+                    print(f"[SelfModelValidator]   - Long-term drift on '{w['trait']}': "
+                          f"{w['step_count']}-step progression={w.get('value_progression', [])}")
         return report
 
     def run_full_validation_async(self, username: str):

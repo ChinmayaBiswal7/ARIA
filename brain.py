@@ -1297,8 +1297,19 @@ To open VS Code project:    [VSCODE_OPEN: path]
         return None
 
     def _set_cache(self, user_input, response):
-        """Store response in cache."""
+        """Store response in cache, skipping context-sensitive responses."""
         import time, hashlib
+        # Do NOT cache responses that include proactive suggestions, goals, or
+        # shopping/Amazon content — these are stale almost immediately.
+        skip_keywords = [
+            "amazon", "goal", "remind", "should i resume", "unfinished task",
+            "you seem", "take a break", "you've been working", "stretch",
+            "proactive", "suggestion", "reminder"
+        ]
+        response_lower = response.lower()
+        if any(kw in response_lower for kw in skip_keywords):
+            print(f"[Brain/Cache] SKIP cache for context-sensitive response: '{response[:60]}...'")
+            return
         key = hashlib.md5(user_input.strip().lower().encode()).hexdigest()
         self._response_cache[key] = {"response": response, "timestamp": time.time()}
         # Evict old entries (keep max 50)

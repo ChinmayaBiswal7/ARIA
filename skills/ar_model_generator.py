@@ -21,6 +21,7 @@ Usage:
 import sys
 import types
 import os
+import socket
 import threading
 import time
 import math
@@ -94,13 +95,32 @@ class ModelGenerator:
         Generate a 3D model from text prompt.
         Returns path to .obj file, or None on failure.
         callback(path) called when done (for async use).
+
+        Cloud-first: if the model is already in Firebase, stream it directly
+        instead of re-generating.  Zero disk after first session.
         """
         safe_name = prompt.lower().replace(" ", "_")[:40]
         out_path  = os.path.join(self.output_dir, f"{safe_name}.obj")
 
-        # Check cache — but only use it if it's a real model (>50KB)
+        # ── Cloud-first check ────────────────────────────────────────────────
+        try:
+            from skills.model_cloud_manager import ModelCloudManager
+            mcm = ModelCloudManager()
+            if mcm.is_available(safe_name):
+                print(f"[ModelGen] Cloud hit for '{safe_name}' — streaming from Firebase.")
+                tmp_path = mcm.stream_to_temp(safe_name)
+                if tmp_path:
+                    if callback:
+                        callback(str(tmp_path))
+                    return str(tmp_path)
+                else:
+                    print(f"[ModelGen] Stream failed; falling through to local generation.")
+        except Exception as _e:
+            print(f"[ModelGen] Cloud check skipped: {_e}")
+
+        # ── Local cache check (only if large enough to be real) ───────────────
         if os.path.exists(out_path) and os.path.getsize(out_path) > 50000:
-            print(f"[ModelGen] Cache hit: {out_path}")
+            print(f"[ModelGen] Local cache hit: {out_path}")
             if callback:
                 callback(out_path)
             return out_path
@@ -113,6 +133,13 @@ class ModelGenerator:
 
         def _run():
             path = self._run_internal(prompt, out_path)
+            if path:
+                # Background upload → Firebase Storage + delete local file
+                try:
+                    from skills.model_cloud_manager import ModelCloudManager
+                    ModelCloudManager().upload_async(safe_name, path, prompt=prompt)
+                except Exception as upload_err:
+                    print(f"[ModelGen] Cloud upload skipped: {upload_err}")
             if callback and path:
                 callback(path)
             return path
@@ -122,6 +149,7 @@ class ModelGenerator:
             return None
         else:
             return _run()
+
 
     def _run_internal(self, prompt, out_path):
         self._generating = True
@@ -179,6 +207,9 @@ class ModelGenerator:
             from shap_e.diffusion.gaussian_diffusion import diffusion_from_config
             from shap_e.models.download import load_model, load_config
             from shap_e.util.notebooks import decode_latent_mesh
+
+            # Increase network timeout to 5 minutes for large model downloads
+            socket.setdefaulttimeout(300)
 
             # BEFORE SHAP-E STARTS
             self.progress = 5

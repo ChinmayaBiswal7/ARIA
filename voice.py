@@ -543,7 +543,10 @@ class Voice:
             print('[Voice] ARIA is speaking. Pausing microphone capture...')
             while self.is_speaking:
                 time.sleep(0.1)
-            time.sleep(0.4)
+            # Wait for ARIA's voice to fully decay before opening mic
+            # 0.4s was too short — audio tail was triggering the abort gate
+            time.sleep(1.2)
+
         if not self.microphone:
             print('[Voice] No microphone available.')
             return None
