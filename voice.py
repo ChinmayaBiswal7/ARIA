@@ -10,8 +10,8 @@ import requests
 from skills.voice_filter import is_valid_speech_text
 
 # VAD Speech Ratio thresholds (0.0 to 1.0)
-WAKE_VAD_THRESHOLD = 0.10
-CONVERSATION_VAD_THRESHOLD = 0.08
+WAKE_VAD_THRESHOLD = 0.18
+CONVERSATION_VAD_THRESHOLD = 0.15
 
 class Voice:
     def __init__(self):
@@ -157,7 +157,7 @@ class Voice:
             speech_ratio = speech_frames / total_frames
             print(f'[Voice/VAD] Speech ratio: {speech_ratio*100:.1f}% (Threshold: {min_ratio*100:.1f}%), Speech frames: {speech_frames}/{total_frames}')
 
-            is_speech_detected = speech_ratio >= min_ratio and speech_frames >= 3
+            is_speech_detected = speech_ratio >= min_ratio and speech_frames >= 5
             if is_speech_detected and hasattr(self, 'on_speech_detected') and self.on_speech_detected:
                 self.on_speech_detected()
             return is_speech_detected
