@@ -204,6 +204,12 @@ export default function App() {
   const initializeRemote = async () => {
     if (isInitialized) return;
 
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showToast("Open in Chrome/Safari");
+      setLastResponse("Mic API not supported in this Webview. Please open this website directly in Google Chrome or Safari.");
+      return;
+    }
+
     try {
       // 1. Web Audio Stream & Analyser Setup
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
