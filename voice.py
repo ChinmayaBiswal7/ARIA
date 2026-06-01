@@ -87,11 +87,14 @@ class Voice:
             raw_bytes = audio_data.get_raw_data()
             audio_np = np.frombuffer(raw_bytes, dtype=np.int16)
             if len(audio_np) == 0:
+                self.last_audio_rms = 0
                 return False
             rms = np.sqrt(np.mean(audio_np.astype(np.float32) ** 2))
+            self.last_audio_rms = rms
             print(f'[Voice/EnergyGate] Captured audio RMS: {rms:.1f} (Threshold: {threshold})')
             return rms > threshold
         except Exception as e:
+            self.last_audio_rms = None
             print(f'[Voice/EnergyGate] Error calculating audio energy: {e}')
             return True
             
@@ -144,7 +147,12 @@ class Voice:
                     pass
 
             if total_frames == 0:
+                self.last_speech_frames = 0
+                self.last_total_frames = 0
                 return False
+
+            self.last_speech_frames = speech_frames
+            self.last_total_frames = total_frames
 
             speech_ratio = speech_frames / total_frames
             print(f'[Voice/VAD] Speech ratio: {speech_ratio*100:.1f}% (Threshold: {min_ratio*100:.1f}%), Speech frames: {speech_frames}/{total_frames}')
@@ -155,6 +163,8 @@ class Voice:
             return is_speech_detected
 
         except Exception as e:
+            self.last_speech_frames = None
+            self.last_total_frames = None
             print(f'[Voice/VAD] WebRTC VAD error: {e}')
             return True
 
@@ -421,6 +431,16 @@ class Voice:
         import numpy as np
         if isinstance(audio_data, np.ndarray):
             audio_data = sr.AudioData(audio_data.tobytes(), 16000, 2)
+
+        # Whisper debug logging
+        duration = len(audio_data.get_raw_data()) / (audio_data.sample_rate * audio_data.sample_width)
+        print("Sending audio to Whisper...")
+        print(f"Duration: {duration:.2f}s")
+        if hasattr(self, 'last_audio_rms') and self.last_audio_rms is not None:
+            print(f"Audio RMS: {self.last_audio_rms:.1f}")
+        if hasattr(self, 'last_speech_frames') and self.last_speech_frames is not None:
+            print(f"Speech frames: {self.last_speech_frames}/{getattr(self, 'last_total_frames', 0)}")
+
         groq_key = self._load_groq_key()
         if groq_key:
             try:

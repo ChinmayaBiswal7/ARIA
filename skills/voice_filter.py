@@ -1,11 +1,17 @@
 """Text-only STT validation helpers for ARIA voice input."""
 
 
+CONVERSATION_CONTROL_WORDS = {
+    "bye", "goodbye", "good bye", "exit", "pause", "resume", "stop"
+}
+
+
 VALID_SHORT_REPLIES = {
     "ok", "okay", "yes", "yeah", "yep", "no", "nope", "hi", "hello",
     "hey", "continue", "stop", "cancel", "right", "sure", "fine",
     "thanks", "thank you", "absolutely", "amazon", "done", "enough",
     "that's it", "thats it", "हेलो", "हाय", "हाँ", "हा", "नहीं", "ठीक",
+    "bye", "goodbye", "good bye", "exit", "pause", "resume"
 }
 
 HALLUCINATIONS = [
@@ -21,6 +27,7 @@ ALLOWED_SINGLE_WORDS = {
     "restart", "shutdown", "unlock", "status", "lock", "help", "aria",
     "back", "next", "up", "down", "left", "right", "clear", "mute", "unmute",
     "continue", "absolutely", "amazon", "done", "enough", "हेलो", "हाय", "हाँ", "हा", "नहीं", "ठीक",
+    "bye", "exit", "pause", "resume"
 }
 
 
@@ -34,6 +41,10 @@ def is_valid_speech_text(text, active_conversation=False):
         return False, "empty"
 
     txt_clean = normalize_transcript(text)
+
+    # Check conversation control commands first (e.g. bypass hallucination filter)
+    if txt_clean in CONVERSATION_CONTROL_WORDS:
+        return True, "conversation_control"
 
     if active_conversation and txt_clean in VALID_SHORT_REPLIES:
         return True, "active_short_reply"
@@ -58,3 +69,4 @@ def is_valid_speech_text(text, active_conversation=False):
             return False, "single_word_ambient_noise"
 
     return True, "valid"
+

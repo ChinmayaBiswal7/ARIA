@@ -49,6 +49,28 @@ export default function App() {
   const sessionStartedAtRef = useRef(Date.now() / 1000);
   const pendingLaptopCommandIdRef = useRef(null);
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstall = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+      showToast("ARIA Remote is ready to install!");
+    };
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log("Install prompt outcome:", outcome);
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+  };
 
   useEffect(() => {
     const handleFsChange = () => {
@@ -517,6 +539,11 @@ export default function App() {
           <div className="logo-text">ARIA</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          {isInstallable && (
+            <button className="pwa-install-btn" onClick={handleInstallClick}>
+              📲 Install App
+            </button>
+          )}
           <div className={connectionDotClass} id="conn-dot"></div>
         </div>
       </div>

@@ -46,6 +46,34 @@ body {
   z-index: 100;
 }
 
+.pwa-install-btn {
+  background: rgba(167, 139, 250, 0.15);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  color: #a78bfa;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 10px rgba(167, 139, 250, 0.1);
+  outline: none;
+}
+
+.pwa-install-btn:hover {
+  background: rgba(167, 139, 250, 0.3);
+  border-color: #a78bfa;
+  box-shadow: 0 0 15px rgba(167, 139, 250, 0.3);
+  transform: translateY(-1px);
+}
+
+.pwa-install-btn:active {
+  transform: translateY(0);
+}
+
 .topbar-logo {
   display: flex;
   align-items: center;
