@@ -20,8 +20,13 @@ import threading
 
 def is_action_tag_authorized(aria, category, source_user_input):
     # Always authorize if it's a remote command from phone/controller
-    if getattr(aria, "_reply_context", None) and getattr(aria._reply_context, "phone_only", False):
+    is_remote = False
+    if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
+        if getattr(aria.firebase_sync, "current_command_id", None) is not None:
+            is_remote = True
+    if is_remote or (getattr(aria, "_reply_context", None) and getattr(aria._reply_context, "phone_only", False)):
         return True
+
 
     inp = (source_user_input or "").lower()
     category = category.upper()

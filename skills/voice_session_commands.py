@@ -49,11 +49,17 @@ def speak(aria, text):
     text = sanitize_spoken_text(aria, text)
     if hasattr(aria, "_spoken_during_turn") and aria._spoken_during_turn is not None:
         aria._spoken_during_turn.append(text)
-    if getattr(aria._reply_context, "phone_only", False):
+    is_remote = False
+    if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
+        if getattr(aria.firebase_sync, "current_command_id", None) is not None:
+            is_remote = True
+            
+    if is_remote or getattr(aria._reply_context, "phone_only", False):
         print(f"[ARIA/Phone Reply] {text}")
         if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
             aria.firebase_sync.update_status(text, status_str="idle")
         return
+
 
     # Graceful TTS degradation — if TTS subsystem is FAILED, fall back to console
     if not HEALTH.is_available(SUBSYSTEM_TTS):

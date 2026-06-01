@@ -199,10 +199,6 @@ class FirebaseSync:
                 if command_id:
                     data["command_id"] = command_id
                 self.firestore_client.collection("status").document("latest").set(data)
-                
-                # Clear command context after returning to idle
-                if status_str == "idle":
-                    self.current_command_id = None
                 return
             except Exception as e:
                 print(f"[FirebaseSync] SDK status update failed: {e}")
@@ -229,10 +225,6 @@ class FirebaseSync:
                                          headers=headers, method="PATCH")
             with urllib.request.urlopen(req, timeout=10):
                 pass
-            
-            # Clear command context after returning to idle
-            if status_str == "idle":
-                self.current_command_id = None
         except Exception as e:
             print(f"[FirebaseSync] REST status update failed: {e}")
 
@@ -356,6 +348,8 @@ class FirebaseSync:
             print(f"[FirebaseSync] Command execution error: {e}")
             if not self.status_updated_during_cmd:
                 self.update_status(f"Error: {e}", status_str="idle")
+        finally:
+            self.current_command_id = None
 
     def capture_and_upload_screenshot(self):
         """Captures the current screen, compresses it, and updates Firestore doc status/latest."""

@@ -47,9 +47,22 @@ export default function App() {
   const currentStatusRef = useRef("OFFLINE");
   const lastStatusTimestampRef = useRef(0);
   const sessionStartedAtRef = useRef(Date.now() / 1000);
-  const suppressRecognitionUntilRef = useRef(0);
   const pendingLaptopCommandIdRef = useRef(null);
-  const wasListeningBeforeTtsRef = useRef(false);
+  const [isFullscreenActive, setIsFullscreenActive] = useState(false);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreenActive(!!(document.fullscreenElement || document.webkitFullscreenElement));
+    };
+
+    document.addEventListener("fullscreenchange", handleFsChange);
+    document.addEventListener("webkitfullscreenchange", handleFsChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFsChange);
+      document.removeEventListener("webkitfullscreenchange", handleFsChange);
+    };
+  }, []);
 
   useEffect(() => {
     currentStatusRef.current = status;
@@ -174,23 +187,11 @@ export default function App() {
 
     utterance.onstart = () => {
       setStatus("SPEAKING");
-      wasListeningBeforeTtsRef.current = shouldListenRef.current;
-      shouldListenRef.current = false;
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch (e) {}
-      }
     };
 
     const handleTtsEnd = () => {
-      shouldListenRef.current = wasListeningBeforeTtsRef.current;
-      if (shouldListenRef.current) {
-        setStatus("LISTENING");
-        if (recognitionRef.current) {
-          try { recognitionRef.current.start(); } catch (e) {}
-        }
-      } else {
-        setStatus("IDLE");
-      }
+      setStatus("IDLE");
+      suppressRecognitionUntilRef.current = Date.now() + 1500;
     };
 
     utterance.onend = handleTtsEnd;
@@ -272,6 +273,7 @@ export default function App() {
         recognition.onresult = (e) => {
           setIsSpeechActive(false);
           if (Date.now() < suppressRecognitionUntilRef.current) return;
+          if (status === "SPEAKING" || pcStatus === "SPEAKING") return; // Ignore if speaking
           const resultIdx = e.resultIndex;
           const transcript = e.results[resultIdx][0].transcript;
           const cleanTranscript = transcript.trim();
@@ -590,40 +592,29 @@ export default function App() {
         <div className="screen-feedback">
           <div className="screen-feedback-title-bar">
             <span className="screen-feedback-title">PC Live Screen</span>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <span className="screen-feedback-subtitle">Tap screen to click</span>
-              <button 
-                onClick={toggleFullScreen}
-                style={{
-                  background: "rgba(0, 229, 255, 0.1)",
-                  border: "1.5px solid rgba(0, 229, 255, 0.25)",
-                  borderRadius: "8px",
-                  color: "var(--accent)",
-                  fontSize: "0.68rem",
-                  fontWeight: "bold",
-                  padding: "4px 8px",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  transition: "all 0.2s"
-                }}
-              >
-                📺 Fullscreen
-              </button>
-            </div>
+            <span className="screen-feedback-subtitle">Tap screen to click</span>
           </div>
           <div 
             ref={screenImageContainerRef}
             className="screen-image-container" 
-            onClick={handleScreenClick}
           >
             <img 
               src={`data:image/jpeg;base64,${screenshot}`} 
               alt="PC Screen" 
               className="screen-image"
+              onClick={handleScreenClick}
             />
+            {/* Floating Fullscreen / Exit Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFullScreen();
+              }}
+              className="fullscreen-toggle-overlay-btn"
+              title={isFullscreenActive ? "Exit Fullscreen" : "Enter Fullscreen"}
+            >
+              {isFullscreenActive ? "📴 Exit Fullscreen" : "📺 Fullscreen"}
+            </button>
           </div>
         </div>
       )}
