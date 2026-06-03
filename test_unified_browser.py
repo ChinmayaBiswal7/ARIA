@@ -28,6 +28,13 @@ class TestUnifiedBrowserSession(unittest.TestCase):
         self.aria.speech_queue = MagicMock()
         self.aria._speak = MagicMock()
         self.aria.brain = MagicMock()
+        self.aria.known_user = "chinmay"
+        self.aria.last_identity_match_time = time.time()
+        self.aria.context_skill = MagicMock()
+        self.aria.sandbox_safety = MagicMock()
+        self.aria.episodic_memory = MagicMock()
+        self.aria.context_skill.get_active_window.return_value = "Normal Desktop"
+        self.aria.sandbox_safety.is_perception_allowed.return_value = True
         
         # Reset BrowserSkill singleton instance mock attributes
         self.bs = BrowserSkill()
@@ -49,6 +56,12 @@ class TestUnifiedBrowserSession(unittest.TestCase):
         self.bs.search_google = MagicMock(return_value=(True, "Searched Google."))
         self.bs.click_first_result = MagicMock(return_value="Clicked first result.")
         self.bs.click_element = MagicMock(return_value="Clicked element.")
+        
+    def tearDown(self):
+        # Clean up any mocks assigned to the singleton instance to prevent mock pollution
+        for attr in ['start_browser', 'close_browser', 'navigate', 'search_google', 'click_first_result', 'click_element', 'is_browser_active']:
+            if attr in self.bs.__dict__:
+                del self.bs.__dict__[attr]
         
     def test_browser_active_state_checking(self):
         # Setup mock active page/context/browser

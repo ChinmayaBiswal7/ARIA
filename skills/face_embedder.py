@@ -9,9 +9,9 @@ import cv2
 import numpy as np
 
 class FaceEmbedder:
-    def __init__(self):
+    def __init__(self, debug_mode=False):
         # No shared face_cascade to prevent cross-thread C++ crashes
-        pass
+        self.debug_mode = debug_mode
 
     @property
     def face_cascade(self):
@@ -20,7 +20,7 @@ class FaceEmbedder:
         except Exception:
             return None
 
-    def extract_face_roi(self, image_array):
+    def extract_face_roi(self, image_array, is_already_cropped=False):
         """Detect face, crop it, resize to 64x64, equalize histogram, and normalize."""
         if image_array is None or not hasattr(image_array, "shape") or len(image_array.shape) < 2:
             return None
@@ -35,25 +35,57 @@ class FaceEmbedder:
         if w < 40 or h < 40:
             return None
 
-        # Detect faces
-        try:
-            cascade = self.face_cascade
-            if cascade is None or cascade.empty():
+        if is_already_cropped:
+            face_crop = gray
+        else:
+            # Detect faces
+            try:
+                cascade = self.face_cascade
+                if cascade is None or cascade.empty():
+                    return None
+                faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(40, 40))
+            except cv2.error as e:
+                print(f"[FaceEmbedder] OpenCV face detection error: {e}")
                 return None
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(40, 40))
-        except cv2.error as e:
-            print(f"[FaceEmbedder] OpenCV face detection error: {e}")
-            return None
-        except Exception as e:
-            print(f"[FaceEmbedder] Unexpected face detection error: {e}")
-            return None
-        if faces is None or len(faces) == 0:
-            return None
+            except Exception as e:
+                print(f"[FaceEmbedder] Unexpected face detection error: {e}")
+                return None
 
-        # Select the largest face detected
-        faces = sorted(faces, key=lambda x: x[2] * x[3], reverse=True)
-        x, y, w, h = faces[0]
-        face_crop = gray[y:y+h, x:x+w]
+            if faces is None or len(faces) == 0:
+                if self.debug_mode:
+                    # Print diagnostics
+                    print(f"[FaceRec/Diagnostics] Faces detected: 0 | Frame size: {gray.shape} | Brightness: {gray.mean():.1f}")
+                    # Save a failed frame to disk to inspect what is seen
+                    try:
+                        import os, time
+                        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                        out_dir = os.path.join(base_dir, "failed_face_frames")
+                        os.makedirs(out_dir, exist_ok=True)
+                        # Clean up old files if they exceed 10 to protect disk space
+                        existing_files = sorted(
+                            [os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.startswith("failed_face_") and f.endswith(".jpg")],
+                            key=os.path.getmtime
+                        )
+                        while len(existing_files) >= 10:
+                            try:
+                                os.remove(existing_files.pop(0))
+                            except Exception:
+                                pass
+                        img_path = os.path.join(out_dir, f"failed_face_{int(time.time() * 1000)}.jpg")
+                        cv2.imwrite(img_path, image_array)
+                        print(f"[FaceRec/Diagnostics] Saved failed face frame to: {img_path}")
+                    except Exception as save_err:
+                        print(f"[FaceRec/Diagnostics] Failed to save failed frame: {save_err}")
+                return None
+
+            # Print diagnostics on success
+            if self.debug_mode:
+                print(f"[FaceRec/Diagnostics] Faces detected: {len(faces)} | Frame size: {gray.shape} | Brightness: {gray.mean():.1f}")
+
+            # Select the largest face detected
+            faces = sorted(faces, key=lambda x: x[2] * x[3], reverse=True)
+            x, y, w, h = faces[0]
+            face_crop = gray[y:y+h, x:x+w]
 
         # Resize to fixed size for uniform features
         face_resized = cv2.resize(face_crop, (64, 64), interpolation=cv2.INTER_AREA)
@@ -63,10 +95,12 @@ class FaceEmbedder:
 
         return face_equalized
 
-    def get_embedding(self, image_array):
+    def get_embedding(self, image_array, is_already_cropped=False):
         """Extract a 4096-dimensional normalized vector representation of the face."""
-        face_roi = self.extract_face_roi(image_array)
+        face_roi = self.extract_face_roi(image_array, is_already_cropped=is_already_cropped)
         if face_roi is None:
+            if self.debug_mode:
+                print(f"[FaceRec] Detection failed (cropped={is_already_cropped})")
             return None
 
         # Normalize pixel values to range [0, 1]
@@ -77,6 +111,8 @@ class FaceEmbedder:
         if norm > 0:
             flat_vector = flat_vector / norm
 
+        if self.debug_mode:
+            print(f"[FaceRec] Embedding generated (cropped={is_already_cropped})")
         return flat_vector.tolist()
 
     @staticmethod

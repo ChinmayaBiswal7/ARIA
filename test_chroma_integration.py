@@ -1,12 +1,19 @@
 import sys
 import os
 import numpy as np
+import unittest
 
 # Ensure project path is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from skills.vector_memory import VectorMemory
-from skills.memory_manager import MemoryManager
+# Check if vector memory dependencies are importable and functional
+try:
+    import chromadb
+    from sentence_transformers import SentenceTransformer
+    from skills.vector_memory import VectorMemory
+    from skills.memory_manager import MemoryManager
+except Exception as e:
+    raise unittest.SkipTest(f"VectorMemory dependencies (chromadb/sentence_transformers) are missing or broken: {e}")
 
 def test_vector_memory():
     print("--- Testing VectorMemory (ChromaDB) ---")

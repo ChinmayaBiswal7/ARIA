@@ -164,31 +164,11 @@ class ExecutorRuntime:
     def _dispatch_with_timeout(
         self, action_data: dict, action: str, timeout: float
     ) -> ExecutionResult:
-        """Run the action in a thread with a hard timeout guard."""
-        result_holder: list = []
-        exc_holder:    list = []
-
-        def _run():
-            try:
-                obs = self._dispatch(action_data, action)
-                result_holder.append(obs)
-            except Exception as e:
-                exc_holder.append(e)
-
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
-
-        if thread.is_alive():
-            # Thread still running — timeout
-            return ExecutionResult(
-                success=False,
-                observation=f"Action '{action}' timed out after {timeout}s.",
-                failure_type=FailureType.TIMEOUT,
-            )
-
-        if exc_holder:
-            err_str = str(exc_holder[0])
+        """Run the action synchronously on the current thread to avoid thread-switching issues with Playwright/greenlet."""
+        try:
+            observation = self._dispatch(action_data, action)
+        except Exception as e:
+            err_str = str(e)
             ftype   = FailureType.classify(err_str)
             return ExecutionResult(
                 success=False,
@@ -196,7 +176,8 @@ class ExecutorRuntime:
                 failure_type=ftype,
             )
 
-        observation = result_holder[0] if result_holder else f"No observation from '{action}'."
+        if not observation:
+            observation = f"No observation from '{action}'."
 
         # Heuristic: treat "failed" / "error" in browser skill responses as failures
         obs_lower = observation.lower()

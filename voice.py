@@ -10,8 +10,8 @@ import requests
 from skills.voice_filter import is_valid_speech_text
 
 # VAD Speech Ratio thresholds (0.0 to 1.0)
-WAKE_VAD_THRESHOLD = 0.18
-CONVERSATION_VAD_THRESHOLD = 0.15
+WAKE_VAD_THRESHOLD = 0.08
+CONVERSATION_VAD_THRESHOLD = 0.08
 
 class Voice:
     def __init__(self):
@@ -20,8 +20,13 @@ class Voice:
         self._is_speaking_lock = False
         self.recording_active = False
         self.vad_detecting_speech = False
+        self.speech_start_time = 0.0
         self.on_speech_detected = None
         self._shutting_down = False
+        self.interrupted_transcription = None
+        self.barge_in_ducking_enabled = True
+        self.barge_in_ducking_ratio = 0.70
+        self.barge_in_consecutive_frames_threshold = 6
 
         self.recognizer = sr.Recognizer()
         self.recognizer.pause_threshold = 1.0        # Give user time to breathe
@@ -40,12 +45,110 @@ class Voice:
         self.voice_analyzer = VoiceEmotionAnalyzer()
         self.last_voice_emotion = None
         self.last_voice_emotion_time = 0.0
+        
+        # Audio & STT quality/confidence tracking
+        self.last_speech_ratio = 0.0
+        self.last_avg_logprob = None
+        self.last_no_speech_prob = None
 
     @property
     def is_speaking(self):
         return self._is_speaking_lock or bool(pygame.mixer.get_init() and pygame.mixer.music.get_busy())
 
+    @property
+    def is_user_actively_speaking(self):
+        if not self.vad_detecting_speech:
+            return False
+        import time as pytime
+        duration = pytime.time() - getattr(self, "speech_start_time", 0.0)
+        return duration >= 0.3
+
+    def stop_playback(self):
+        try:
+            if pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+                try:
+                    pygame.mixer.music.unload()
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[Voice] Error stopping playback: {e}")
+        self._is_speaking_lock = False
+
     def is_valid_speech(self, text, active_conversation=False):
+        txt_clean = (text or "").strip().lower().replace(".", "").replace("!", "").replace("?", "")
+        words = txt_clean.split()
+        
+        avg_logprob = getattr(self, 'last_avg_logprob', None)
+        no_speech_prob = getattr(self, 'last_no_speech_prob', None)
+
+        # 1. Global Whisper Confidence Triage
+        # Reject highly uncertain segments that are likely static, AC hum or breath noises
+        if avg_logprob is not None and avg_logprob < -1.00:
+            print(f"[VoiceFilter] Filtered out transcript '{text}' due to low confidence (avg_logprob: {avg_logprob:.3f} < -1.00)")
+            return False
+            
+        if no_speech_prob is not None and no_speech_prob > 0.45:
+            print(f"[VoiceFilter] Filtered out transcript '{text}' due to high no-speech probability (no_speech_prob: {no_speech_prob:.3f} > 0.45)")
+            return False
+
+        # 1b. Strict common/suspicious Whisper hallucination filter
+        COMMON_HALLUCINATIONS = {
+            "thank you", "thanks", "terima kasih", "okay", "yeah", "hmm", "bye", "goodbye", "yes", "no"
+        }
+        clean_phrase = txt_clean.strip()
+        if clean_phrase in COMMON_HALLUCINATIONS:
+            if avg_logprob is not None and avg_logprob < -0.55:
+                print(f"[VoiceFilter] Filtered out suspicious common hallucination '{text}' due to low avg_logprob ({avg_logprob:.3f} < -0.55)")
+                return False
+            if no_speech_prob is not None and no_speech_prob > 0.15:
+                print(f"[VoiceFilter] Filtered out suspicious common hallucination '{text}' due to high no_speech_prob ({no_speech_prob:.3f} > 0.15)")
+                return False
+
+        SHORT_PHRASE_GUARD = {
+            "thank you",
+            "thanks",
+            "okay",
+            "yes",
+            "no",
+            "hello",
+            "hey"
+        }
+        
+        if len(words) < 3 and txt_clean in SHORT_PHRASE_GUARD:
+            vad_ratio = getattr(self, 'last_speech_ratio', 0.0)
+            
+            # Check wake word presence
+            main_mod = __import__('__main__')
+            aria = getattr(main_mod, 'instance', None) or getattr(main_mod, 'aria_instance', None)
+            wake_words = ["hey aria", "ok aria", "okay aria", "aria"]
+            if aria and hasattr(aria, 'WAKE_WORDS'):
+                wake_words = aria.WAKE_WORDS
+            has_wake = any(w in txt_clean for w in wake_words)
+            
+            is_valid = True
+            reasons = []
+            
+            if vad_ratio < 0.10:
+                is_valid = False
+                reasons.append(f"VAD speech ratio too low ({vad_ratio*100:.1f}% < 10.0%)")
+            
+            if avg_logprob is not None and avg_logprob < -0.80:
+                is_valid = False
+                reasons.append(f"Whisper avg_logprob too low ({avg_logprob:.3f} < -0.80)")
+                
+            if no_speech_prob is not None and no_speech_prob > 0.40:
+                is_valid = False
+                reasons.append(f"Whisper no_speech_prob too high ({no_speech_prob:.3f} > 0.40)")
+                
+            if not (active_conversation or has_wake):
+                is_valid = False
+                reasons.append("No active conversation or wake word")
+                
+            if not is_valid:
+                print(f"[VoiceFilter] Filtered out short phrase '{text}' due to: {', '.join(reasons)}")
+                return False
+
         valid, reason = is_valid_speech_text(text, active_conversation=active_conversation)
         if valid:
             return True
@@ -155,6 +258,7 @@ class Voice:
             self.last_total_frames = total_frames
 
             speech_ratio = speech_frames / total_frames
+            self.last_speech_ratio = speech_ratio
             print(f'[Voice/VAD] Speech ratio: {speech_ratio*100:.1f}% (Threshold: {min_ratio*100:.1f}%), Speech frames: {speech_frames}/{total_frames}')
 
             is_speech_detected = speech_ratio >= min_ratio and speech_frames >= 5
@@ -204,8 +308,21 @@ class Voice:
         try:
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=4096)
             self.voice_model = 'en-US-AriaNeural'
+            print('[Voice] Pygame audio mixer initialized successfully.')
         except Exception as e:
             print(f'[Voice] Audio Mixer Init Error: {e}')
+
+    def _get_windows_volume(self):
+        try:
+            from ctypes import cast, POINTER
+            from comtypes import CLSCTX_ALL
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = cast(interface, POINTER(IAudioEndpointVolume))
+            return int(volume.GetMasterVolumeLevelScalar() * 100)
+        except Exception:
+            return None
 
     def _init_mic(self):
         try:
@@ -238,9 +355,8 @@ class Voice:
                     all_frames = np.concatenate(frames).astype(np.float32)
                     self.noise_profile = all_frames
                     noise_rms = np.sqrt(np.mean(all_frames ** 2))
-                    # Dynamically set energy threshold based on noise level
-                    # Multiply noise RMS by 1.8, but clamp it between 150 and 800 to prevent extreme settings
-                    self.energy_rms_threshold = max(150, min(800, int(noise_rms * 1.8)))
+                    # Multiply noise RMS by 1.8, but clamp it between 35 and 800 to prevent extreme settings
+                    self.energy_rms_threshold = max(35, min(800, int(noise_rms * 1.8)))
                     print(f'[Voice] Noise profile calibrated successfully ({len(self.noise_profile)} samples).')
                     print(f'[Voice] Dynamic energy threshold set to: {self.energy_rms_threshold} (Noise RMS: {noise_rms:.1f})')
                 else:
@@ -249,7 +365,7 @@ class Voice:
         except Exception as e:
             print(f'[Voice] Noise calibration skipped: {e}')
 
-    def speak(self, text, block=True):
+    def speak(self, text, block=True, allow_barge_in=True):
         if not text:
             return
         self._is_speaking_lock = True
@@ -263,6 +379,30 @@ class Voice:
             clean = clean.strip()
             if not clean:
                 return
+
+            # Log TTS configuration parameters
+            tts_engine = "Edge-TTS"
+            eleven_key = self._load_elevenlabs_key()
+            if eleven_key:
+                tts_engine = "ElevenLabs"
+            
+            try:
+                current_vol = int(pygame.mixer.music.get_volume() * 100)
+            except Exception:
+                current_vol = 100
+                
+            print(f"[TTS Engine] {tts_engine}")
+            print(f"[Voice Name] {self.voice_model if tts_engine == 'Edge-TTS' else 'ElevenLabs/21m00Tcm4TlvDq8ikWAM'}")
+            print(f"[Rate] +0%")
+            print(f"[Pitch] +0Hz")
+            print(f"[Volume] {current_vol}")
+            print(f"[Output Device] Default Speaker")
+            win_vol = self._get_windows_volume()
+            win_vol_str = f"{win_vol}%" if win_vol is not None else "N/A (pycaw error or not supported)"
+            print(f"[Windows Master Volume] {win_vol_str}")
+            print(f"[pygame Mixer Volume] {current_vol}%")
+            print(f"[TTS Text Length] {len(clean)} chars")
+
             print(f'[ARIA]: {clean}')
             if pygame.mixer.music.get_busy():
                 pygame.mixer.music.stop()
@@ -307,75 +447,207 @@ class Voice:
             if not generated:
                 try:
                     communicate = edge_tts.Communicate(clean, self.voice_model)
-                    asyncio.run(communicate.save(output_file))
+                    # Add a 3.0 second timeout for downloading Edge-TTS audio to avoid hanging on slow network
+                    asyncio.run(asyncio.wait_for(communicate.save(output_file), timeout=3.0))
                     generated = True
                 except Exception as e:
-                    print(f'[Voice] Edge-TTS generation error: {e}. Falling back to offline local TTS (pyttsx3)...')
+                    print(f'[Voice] Edge-TTS generation error: {repr(e)}. Falling back to offline local TTS (pyttsx3)...')
+                    try:
+                        if os.path.exists(output_file):
+                            os.remove(output_file)
+                    except OSError:
+                        pass
                     try:
                         import pyttsx3
                         engine = pyttsx3.init()
-                        engine.say(clean)
-                        if block:
-                            engine.runAndWait()
-                        else:
-                            def run_tts():
-                                engine.runAndWait()
-                            threading.Thread(target=run_tts, daemon=True).start()
-                        self._is_speaking_lock = False
-                        return
+                        
+                        # Attempt to set a local female voice for the offline fallback (e.g. Microsoft Zira)
+                        try:
+                            voices = engine.getProperty('voices')
+                            female_voice = None
+                            for v in voices:
+                                name_lower = v.name.lower()
+                                if any(x in name_lower for x in ["zira", "female", "hazel", "heera", "haruka", "elsa", "susan"]):
+                                    female_voice = v.id
+                                    break
+                            if female_voice:
+                                engine.setProperty('voice', female_voice)
+                        except Exception as voice_select_err:
+                            print(f"[Voice] Error setting female fallback voice: {voice_select_err}")
+
+                        try:
+                            pytts_voice_id = engine.getProperty('voice')
+                            pytts_voice = pytts_voice_id
+                            voices = engine.getProperty('voices')
+                            for v in voices:
+                                if v.id == pytts_voice_id:
+                                    pytts_voice = v.name
+                                    break
+                            pytts_rate = engine.getProperty('rate')
+                            pytts_vol = int(engine.getProperty('volume') * 100)
+                        except Exception:
+                            pytts_voice = "default"
+                            pytts_rate = "default"
+                            pytts_vol = 100
+                            
+                        print(f"[TTS Engine] pyttsx3 (Fallback)")
+                        print(f"[Voice Name] {pytts_voice}")
+                        print(f"[Rate] {pytts_rate}")
+                        print(f"[Pitch] Default")
+                        print(f"[Volume] {pytts_vol}")
+                        print(f"[Output Device] Default Speaker")
+
+                        # Save local voice output to the audio file so we can run it through pygame and support barge-in
+                        # Use a .wav file extension as pyttsx3 is most reliable with WAV on Windows
+                        if output_file.endswith('.mp3'):
+                            output_file = output_file.replace('.mp3', '.wav')
+                        
+                        engine.save_to_file(clean, output_file)
+                        engine.runAndWait()
+                        generated = True
+                        print(f"[Voice] Local pyttsx3 saved fallback audio to: {output_file}")
                     except Exception as pytts_err:
-                        print(f'[Voice] Local pyttsx3 TTS failed: {pytts_err}')
-                        self._is_speaking_lock = False
-                        return
+                        print(f'[Voice] Local pyttsx3 fallback file save failed: {pytts_err}. Trying direct speak...')
+                        try:
+                            engine.say(clean)
+                            if block:
+                                engine.runAndWait()
+                            else:
+                                def run_tts():
+                                    engine.runAndWait()
+                                threading.Thread(target=run_tts, daemon=True).start()
+                            self._is_speaking_lock = False
+                            return
+                        except Exception as direct_err:
+                            print(f"[Voice] Local pyttsx3 direct speak failed: {direct_err}")
+                            self._is_speaking_lock = False
+                            return
             interrupted = False
             try:
+                # Log generated speech file size
+                try:
+                    speech_size = os.path.getsize(output_file)
+                    speech_size_kb = f"{speech_size / 1024:.1f} KB"
+                except Exception:
+                    speech_size_kb = "N/A"
+                print(f"[Generated Speech Size] {speech_size_kb}")
+                
+                if self.is_user_actively_speaking:
+                    print("[Voice] User is actively speaking. Discarding response before playback starts.")
+                    self.stop_playback()
+                    return True
+
+                print(f"[TTS] Audio playback starting: {output_file}")
                 pygame.mixer.music.load(output_file)
+                
+                print("[TTS Telemetry] Mixer Init before play:", pygame.mixer.get_init())
+                print("[TTS Telemetry] Mixer Busy before play:", pygame.mixer.music.get_busy())
+                
                 pygame.mixer.music.play()
+                print("[TTS] Audio playback triggered successfully")
+                
+                print("[TTS Telemetry] Mixer Busy immediately after play:", pygame.mixer.music.get_busy())
+                time.sleep(0.1)  # Allow audio hardware buffer initialization
+                print("[TTS Telemetry] Mixer Busy 100ms after play:", pygame.mixer.music.get_busy())
                 if block:
-                    while pygame.mixer.music.get_busy():
-                        time.sleep(0.05)
+                    if allow_barge_in:
+                        interrupted = self._monitor_mic_during_speech(clean)
+                    else:
+                        # Wait for playback to finish naturally without VAD monitoring or ducking
+                        while pygame.mixer.music.get_busy():
+                            time.sleep(0.05)
+                        print("[TTS] Audio playback finished naturally")
+                        interrupted = False
             except Exception as e:
                 print(f'[Voice] Audio playback Error: {e}')
             return interrupted
         finally:
             self._is_speaking_lock = False
 
-    def _monitor_mic_during_speech(self):
-        if not self.microphone or getattr(self.microphone, 'stream', None) is not None:
+    def _monitor_mic_during_speech(self, spoken_text):
+        if not self.microphone:
             while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
+                time.sleep(0.05)
             return False
+
         t_start = time.time()
-        while pygame.mixer.music.get_busy() and (time.time() - t_start) < 0.4:
-            pygame.time.Clock().tick(10)
+        # Wait a short moment (e.g. 0.3s) for the audio playback to actually start and stabilize
+        while pygame.mixer.music.get_busy() and (time.time() - t_start) < 0.3:
+            time.sleep(0.05)
+
+        if not pygame.mixer.music.get_busy():
+            return False
+
         import numpy as np
         try:
             import webrtcvad
             vad = webrtcvad.Vad(3)
         except ImportError:
             vad = None
+
         interrupted = False
+        recorded_audio = None
+        original_volume = None
+        
         try:
             with self.microphone as source:
                 sample_rate = source.SAMPLE_RATE
+                sample_width = source.SAMPLE_WIDTH
                 vad_rate = 16000
                 vad_frame_ms = 30
                 vad_samples = int(vad_rate * vad_frame_ms / 1000)
                 source_samples = int(sample_rate * vad_frame_ms / 1000)
-                interrupt_threshold = max(self.energy_rms_threshold * 2.5, 1000)
-                consecutive_speech = 0
-                required_speech_frames = 10
+                
+                # Duck volume slightly to avoid echo/feedback bleed if enabled
                 original_volume = pygame.mixer.music.get_volume()
-                pygame.mixer.music.set_volume(original_volume * 0.7)
-                while pygame.mixer.music.get_busy():
+                print(f"[Voice/Interrupt] [Telemetry] Volume before ducking: {original_volume:.2f}")
+                if getattr(self, "barge_in_ducking_enabled", True):
+                    duck_ratio = getattr(self, "barge_in_ducking_ratio", 0.70)
+                    ducked_volume = original_volume * duck_ratio
+                    print(f"[Voice/Interrupt] Ducking volume from {original_volume:.2f} to {ducked_volume:.2f} (ratio: {duck_ratio:.2f})")
+                    pygame.mixer.music.set_volume(ducked_volume)
+                    print(f"[Voice/Interrupt] [Telemetry] Volume after ducking: {pygame.mixer.music.get_volume():.2f}")
+                else:
+                    print(f"[Voice/Interrupt] Volume ducking disabled. Keeping volume at {original_volume:.2f}")
+                
+                # Energy threshold for interruption is slightly higher than baseline
+                interrupt_threshold = max(self.energy_rms_threshold * 1.3, 350)
+                
+                frames = []
+                consecutive_speech = 0
+                required_speech_frames = getattr(self, "barge_in_consecutive_frames_threshold", 6)  # Default 6 frames (~180ms) to ignore quick transient noise
+                
+                speech_detected = False
+                silence_frames_after_speech = 0
+                max_silence_frames = int(1.0 / (vad_frame_ms / 1000.0))  # 1.0s of silence to stop recording
+                max_recording_time = 6.0  # Max 6 seconds of recording for barge-in
+                
+                record_start_time = None
+                
+                while True:
+                    music_playing = pygame.mixer.music.get_busy()
+                    
+                    # If music stopped naturally and we haven't detected speech, we are done
+                    if not music_playing and not speech_detected:
+                        break
+                        
+                    # If we have been recording for too long, break
+                    if record_start_time and (time.time() - record_start_time) > max_recording_time:
+                        break
+                        
                     try:
                         raw_bytes = source.stream.read(source_samples)
                         if not raw_bytes:
+                            time.sleep(0.01)
                             continue
+                            
                         audio_np = np.frombuffer(raw_bytes, dtype=np.int16)
                         if len(audio_np) == 0:
                             continue
+                            
                         rms = np.sqrt(np.mean(audio_np.astype(np.float32) ** 2))
+                        
+                        # Run VAD check
                         is_speech = False
                         if vad:
                             if sample_rate != vad_rate:
@@ -390,6 +662,7 @@ class Voice:
                                     vad_bytes = b''
                             else:
                                 vad_bytes = raw_bytes
+                                
                             if len(vad_bytes) >= vad_samples * 2:
                                 try:
                                     is_speech = vad.is_speech(vad_bytes[:vad_samples * 2], vad_rate)
@@ -397,33 +670,100 @@ class Voice:
                                     pass
                         else:
                             is_speech = rms > interrupt_threshold
-                        if rms > interrupt_threshold and is_speech:
-                            consecutive_speech += 1
-                            if consecutive_speech >= required_speech_frames:
-                                print(f'[Voice/Interrupt] Voice interrupt triggered! RMS: {rms:.1f}, VAD: {is_speech}')
-                                if hasattr(self, 'on_speech_detected') and self.on_speech_detected:
-                                    self.on_speech_detected()
-                                interrupted = True
-                                break
+ 
+                        if is_speech and rms > interrupt_threshold:
+                            if not speech_detected:
+                                consecutive_speech += 1
+                                if consecutive_speech >= required_speech_frames:
+                                    # Interrupt triggered! Stop the music immediately
+                                    print(f"[Voice/Interrupt] Voice activity detected (RMS: {rms:.1f}). Stopping TTS.")
+                                    pygame.mixer.music.stop()
+                                    try:
+                                        pygame.mixer.music.unload()
+                                    except Exception:
+                                        pass
+                                    speech_detected = True
+                                    record_start_time = time.time()
+                            else:
+                                # We are in recording phase, reset silence count
+                                silence_frames_after_speech = 0
+                            
+                            # Keep the frames
+                            frames.append(raw_bytes)
                         else:
-                            consecutive_speech = max(0, consecutive_speech - 1)
+                            if not speech_detected:
+                                consecutive_speech = max(0, consecutive_speech - 1)
+                            else:
+                                # In recording phase, count silence frames
+                                silence_frames_after_speech += 1
+                                frames.append(raw_bytes)
+                                if silence_frames_after_speech >= max_silence_frames:
+                                    print("[Voice/Interrupt] User finished speaking (silence timeout).")
+                                    break
+                                    
                     except IOError:
-                        pass
-                    pygame.time.Clock().tick(20)
+                        time.sleep(0.01)
+                        
+                if speech_detected and frames:
+                    all_bytes = b"".join(frames)
+                    recorded_audio = sr.AudioData(all_bytes, sample_rate, sample_width)
+                    
+        except Exception as e:
+            print(f"[Voice/Interrupt] Monitoring error: {e}")
+        finally:
+            if original_volume is not None and getattr(self, "barge_in_ducking_enabled", True):
                 try:
                     pygame.mixer.music.set_volume(original_volume)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f'[Voice/Interrupt] Monitoring error: {e}')
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
+                    print(f"[Voice/Interrupt] Restored volume to {original_volume:.2f}")
+                    print(f"[Voice/Interrupt] [Telemetry] Volume after restoration: {pygame.mixer.music.get_volume():.2f}")
+                except Exception as vol_err:
+                    print(f"[Voice/Interrupt] Could not restore volume: {vol_err}")
+            
+        # Process the recorded interrupt audio
+        if recorded_audio:
+            # 1. Denoise
+            denoised = self.denoise_audio(recorded_audio)
+            
+            # 2. Check duration
+            duration = len(denoised.get_raw_data()) / (denoised.sample_rate * denoised.sample_width)
+            if duration >= 0.4:
+                # 3. Transcribe
+                transcript = self.whisper_transcribe(denoised)
+                if transcript and transcript.strip():
+                    txt = transcript.strip()
+                    
+                    # 4. Filter speaker bleed / empty
+                    clean_transcript = txt.lower().replace(".", "").replace("!", "").replace("?", "").strip()
+                    clean_spoken = spoken_text.lower().replace(".", "").replace("!", "").replace("?", "").strip()
+                    
+                    # Stop words always trigger
+                    stop_words = {"stop", "wait", "hold on", "hold", "listen", "aria", "cancel", "no"}
+                    words = set(clean_transcript.split())
+                    has_stop_word = any(w in stop_words for w in words)
+                    
+                    # 5. Smart Barge-In Interruption Check (ignore low-confidence noise & prioritize keywords)
+                    avg_logprob = getattr(self, "last_avg_logprob", None)
+                    no_speech_prob = getattr(self, "last_no_speech_prob", None)
+                    
+                    is_confident = True
+                    if avg_logprob is not None and avg_logprob < -0.80:
+                        is_confident = False
+                    if no_speech_prob is not None and no_speech_prob > 0.45:
+                        is_confident = False
+                        
+                    # If it's low confidence, reject it unless it contains a clear stop word
+                    if not is_confident and not (has_stop_word and avg_logprob is not None and avg_logprob >= -1.1):
+                        print(f"[Voice/Interrupt] Rejected low-confidence interrupt transcript: '{txt}' (avg_logprob: {avg_logprob}, no_speech_prob: {no_speech_prob})")
+                        interrupted = False
+                    else:
+                        if has_stop_word or (clean_transcript not in clean_spoken and len(clean_transcript) > 0):
+                            print(f"[Voice/Interrupt] Interrupted with text: '{txt}' (avg_logprob: {avg_logprob}, no_speech_prob: {no_speech_prob})")
+                            self.interrupted_transcription = txt
+                            interrupted = True
+                        else:
+                            print(f"[Voice/Interrupt] Ignored potential speaker bleed transcript: '{txt}' (avg_logprob: {avg_logprob}, no_speech_prob: {no_speech_prob})")
+                        
         if interrupted:
-            try:
-                pygame.mixer.music.stop()
-                pygame.mixer.music.unload()
-            except Exception:
-                pass
             return True
         return False
 
@@ -432,14 +772,18 @@ class Voice:
         if isinstance(audio_data, np.ndarray):
             audio_data = sr.AudioData(audio_data.tobytes(), 16000, 2)
 
+        # Reset last confidence metrics
+        self.last_avg_logprob = None
+        self.last_no_speech_prob = None
+
         # Whisper debug logging
         duration = len(audio_data.get_raw_data()) / (audio_data.sample_rate * audio_data.sample_width)
         print("Sending audio to Whisper...")
         print(f"Duration: {duration:.2f}s")
         if hasattr(self, 'last_audio_rms') and self.last_audio_rms is not None:
             print(f"Audio RMS: {self.last_audio_rms:.1f}")
-        if hasattr(self, 'last_speech_frames') and self.last_speech_frames is not None:
-            print(f"Speech frames: {self.last_speech_frames}/{getattr(self, 'last_total_frames', 0)}")
+        if hasattr(self, 'last_speech_ratio') and self.last_speech_ratio is not None:
+            print(f"Speech frames: {getattr(self, 'last_speech_frames', 0)}/{getattr(self, 'last_total_frames', 0)}")
 
         groq_key = self._load_groq_key()
         if groq_key:
@@ -454,7 +798,7 @@ class Voice:
                     files = {
                         'file': (os.path.basename(temp_wav), f, 'audio/wav'),
                         'model': (None, 'whisper-large-v3'),
-                        'response_format': (None, 'json')
+                        'response_format': (None, 'verbose_json')
                     }
                     if getattr(self, 'stt_language', None):
                         files['language'] = (None, self.stt_language)
@@ -464,7 +808,19 @@ class Voice:
                 except Exception:
                     pass
                 if res.status_code == 200:
-                    text = res.json().get('text', '').strip()
+                    res_data = res.json()
+                    text = res_data.get('text', '').strip()
+                    segments = res_data.get('segments', [])
+                    avg_logprob = 0.0
+                    no_speech_prob = 0.0
+                    if segments:
+                        avg_logprob = segments[0].get('avg_logprob', 0.0)
+                        no_speech_prob = segments[0].get('no_speech_prob', 0.0)
+                    
+                    self.last_avg_logprob = avg_logprob
+                    self.last_no_speech_prob = no_speech_prob
+                    
+                    print(f"[Voice/Whisper] avg_logprob: {avg_logprob:.3f}, no_speech_prob: {no_speech_prob:.3f}")
                     if text:
                         print(f'[STT Whisper]: {text}')
                         return text
@@ -487,7 +843,7 @@ class Voice:
             except:
                 return ''
 
-    def _record_audio_chunked(self, source, timeout=3, phrase_time_limit=5):
+    def _record_audio_chunked(self, source, timeout=3, phrase_time_limit=5, active_conversation=False):
         if getattr(self, '_shutting_down', False):
             return None
         import time as pytime
@@ -515,8 +871,20 @@ class Voice:
                 if getattr(self, '_shutting_down', False):
                     return None
                 if self.is_speaking:
-                    print("[Voice/ChunkedRecord] Aborted recording because ARIA started speaking.")
-                    return None
+                    if started_speech:
+                        print("[Voice/ChunkedRecord] ARIA started speaking while user was already speaking. Stopping ARIA to prioritize user.")
+                        self.stop_playback()
+                    else:
+                        print("[Voice/ChunkedRecord] Aborted recording because ARIA started speaking.")
+                        return None
+                if not active_conversation:
+                    main_mod = __import__('__main__')
+                    aria = getattr(main_mod, 'instance', None) or getattr(main_mod, 'aria_instance', None)
+                    if aria:
+                        is_owner_active = (getattr(aria, 'known_user', None) in ["chinmay", "chinmaya"] and (pytime.time() - getattr(aria, "last_identity_match_time", 0.0) < 180.0))
+                        if is_owner_active:
+                            print("[Voice/ChunkedRecord] Aborted recording because owner became active (bypassing wake word).")
+                            return None
 
                 now = pytime.time()
                 if not started_speech:
@@ -539,12 +907,14 @@ class Voice:
                     if len(audio_np) > 0:
                         rms = np.sqrt(np.mean(audio_np.astype(np.float32) ** 2))
                         if rms > rms_threshold:
+                            self.vad_detecting_speech = True
                             if not started_speech:
                                 started_speech = True
-                                self.vad_detecting_speech = True
                                 speech_start_time = now
+                                self.speech_start_time = now
                             silence_start_time = None
                         else:
+                            self.vad_detecting_speech = False
                             if started_speech:
                                 if silence_start_time is None:
                                     silence_start_time = now
@@ -555,6 +925,7 @@ class Voice:
         finally:
             self.recording_active = False
             self.vad_detecting_speech = False
+            self.speech_start_time = 0.0
 
         if not frames:
             return None
@@ -565,13 +936,32 @@ class Voice:
     def listen(self, timeout=6, phrase_time_limit=12, active_conversation=False):
         if getattr(self, '_shutting_down', False):
             return None
+        if getattr(self, 'interrupted_transcription', None):
+            txt = self.interrupted_transcription
+            self.interrupted_transcription = None
+            print(f"[Voice] Returning pre-transcribed interrupt text: '{txt}'")
+            return txt
         if self.is_speaking:
             print('[Voice] ARIA is speaking. Pausing microphone capture...')
             while self.is_speaking:
                 time.sleep(0.1)
+            
+            # Check for immediate barge-in interruption during wait
+            if getattr(self, 'interrupted_transcription', None):
+                txt = self.interrupted_transcription
+                self.interrupted_transcription = None
+                print(f"[Voice] Returning pre-transcribed interrupt text after speaking finished/interrupted: '{txt}'")
+                return txt
+
             # Wait for ARIA's voice to fully decay before opening mic
             # 0.4s was too short — audio tail was triggering the abort gate
             time.sleep(1.2)
+            
+            if getattr(self, 'interrupted_transcription', None):
+                txt = self.interrupted_transcription
+                self.interrupted_transcription = None
+                print(f"[Voice] Returning pre-transcribed interrupt text after delay: '{txt}'")
+                return txt
 
         if not self.microphone:
             print('[Voice] No microphone available.')
@@ -579,7 +969,7 @@ class Voice:
         try:
             with self.microphone as source:
                 print('[STATUS] Listening...')
-                audio = self._record_audio_chunked(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
+                audio = self._record_audio_chunked(source, timeout=timeout, phrase_time_limit=phrase_time_limit, active_conversation=active_conversation)
                 if audio is None:
                     return None
             audio = self.denoise_audio(audio)
@@ -594,14 +984,21 @@ class Voice:
             if not self.is_human_speech(audio, active_conversation=active_conversation):
                 print('[Voice/VAD] No human speech detected in audio. Skipping STT.')
                 return None
+            if getattr(self, '_shutting_down', False):
+                return None
             text = self.whisper_transcribe(audio)
             if text:
                 print(f'[User]: {text}')
                 try:
-                    self.last_voice_emotion = self.voice_analyzer.analyze(audio)
-                    self.last_voice_emotion_time = time.time()
+                    def _run_analyzer_async():
+                        try:
+                            self.last_voice_emotion = self.voice_analyzer.analyze(audio)
+                            self.last_voice_emotion_time = time.time()
+                        except Exception as background_err:
+                            print(f'[Voice] Voice emotion analysis async error: {background_err}')
+                    threading.Thread(target=_run_analyzer_async, daemon=True).start()
                 except Exception as analyzer_err:
-                    print(f'[Voice] Voice emotion analysis failed: {analyzer_err}')
+                    print(f'[Voice] Voice emotion analysis setup failed: {analyzer_err}')
                 return text
             return None
         except OSError as e:
@@ -677,7 +1074,7 @@ class Voice:
             return None
         try:
             with self.microphone as source:
-                audio = self._record_audio_chunked(source, timeout=timeout, phrase_time_limit=5)
+                audio = self._record_audio_chunked(source, timeout=timeout, phrase_time_limit=5, active_conversation=False)
                 if audio is None:
                     return None
             audio = self.denoise_audio(audio)

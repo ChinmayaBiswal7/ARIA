@@ -95,19 +95,86 @@ def execute_actions(aria, response, source_user_input=""):
     """Parse and execute any bracketed action tags in the AI response."""
     result = response
     if not result:
-        return
+        return result
+
+    # Check if this is a remote command from phone/controller
+    is_remote = False
+    if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
+        if getattr(aria.firebase_sync, "current_command_id", None) is not None:
+            is_remote = True
+    if is_remote or (getattr(aria, "_reply_context", None) and getattr(aria._reply_context, "phone_only", False)):
+        is_remote = True
+
+    # ── Double-Confirmation check for Sensitive/High-Risk Actions ──
+    sensitive_tags = []
+    all_tags = re.findall(r'\[[a-zA-Z_]+(?::\s*[^\]]+)?\]', result)
+    for tag in all_tags:
+        tag_lower = tag.lower()
+        if any(x in tag_lower for x in ["[shutdown]", "[restart]", "[run_shell]", "[shell]", "[powershell]", "[cmd]", "[delete_file]", "[delete_folder]"]):
+            sensitive_tags.append(tag)
+            
+    if sensitive_tags:
+        import time
+        now = time.time()
+        pending = getattr(aria, "pending_sensitive_action", None)
+        pending_time = getattr(aria, "pending_sensitive_action_time", 0.0)
+        
+        clean_input = source_user_input.strip().lower().replace(".", "").replace("!", "").replace("?", "")
+        is_confirmation = clean_input in ["yes execute", "yes, execute", "execute", "yes", "confirm", "yes do it"]
+        
+        if is_confirmation and pending and (now - pending_time < 20.0):
+            # Verify user is owner
+            user_to_verify = aria.known_user
+            if is_remote:
+                user_to_verify = "chinmaya"
+            access_level = aria.security.get_user_access_level(user_to_verify)
+            if access_level < aria.security.LEVEL_OWNER:
+                aria._speak("Verification required. Checking identity...")
+                detected = aria.identify_user()
+                if detected and aria.security.get_user_access_level(detected) >= aria.security.LEVEL_OWNER:
+                    aria.known_user = detected
+                else:
+                    aria._speak("Access Denied. Owner authentication is required for this action.")
+                    aria.pending_sensitive_action = None
+                    aria.pending_sensitive_action_time = 0.0
+                    return ""
+            
+            result = pending
+            aria.pending_sensitive_action = None
+            aria.pending_sensitive_action_time = 0.0
+            print(f"[SecurityGuard] Sensitive action confirmed by user: {sensitive_tags}")
+        else:
+            aria.pending_sensitive_action = result
+            aria.pending_sensitive_action_time = now
+            print(f"[SecurityGuard] Intercepted sensitive action {sensitive_tags}. Requesting confirmation.")
+            
+            for t in all_tags:
+                result = result.replace(t, "")
+            
+            aria._speak(f"You have requested a sensitive action: {', '.join(sensitive_tags)}. Please say 'yes, execute' to confirm.")
+            return result
 
     # ── Security Guard Action Verification ──
     all_tags = re.findall(r'\[[a-zA-Z_]+(?::\s*[^\]]+)?\]', result)
     for tag in all_tags:
-        safe, msg = aria.security.verify_agent_action_tag(tag)
+        user_to_verify = aria.known_user
+        if is_remote:
+            user_to_verify = "chinmaya"
+        safe, msg = aria.security.verify_agent_action_tag(tag, user_name=user_to_verify)
         if not safe:
             print(f"[SecurityGuard] Verification required for tag: {tag}. Reason: {msg}")
             aria._speak("Action restricted. Verifying identity via camera...")
             detected = aria.identify_user()
-            if detected in ["chinmay", "chinmaya"]:
-                print("[SecurityGuard] Verified as Chinmaya/Chinmay. Bypassing lock.")
-                aria.security.unlock_admin()
+            if detected and detected != "Unknown":
+                still_safe, new_msg = aria.security.verify_agent_action_tag(tag, user_name=detected)
+                if still_safe:
+                    print(f"[SecurityGuard] Verified as '{detected}' (Access Level: {aria.security.get_user_access_level(detected)}). Authorizing.")
+                    aria.known_user = detected
+                    if detected in ["chinmay", "chinmaya"]:
+                        aria.security.unlock_admin()
+                else:
+                    aria._speak(f"Access denied. {new_msg}")
+                    result = result.replace(tag, "")
             else:
                 aria._speak(f"Access denied. {msg}")
                 result = result.replace(tag, "")
@@ -158,6 +225,7 @@ def execute_actions(aria, response, source_user_input=""):
         text = match.group(1).strip()
         if not is_action_tag_authorized(aria, "TYPE", source_user_input):
             print(f"[ActionGuard] Blocked unrequested type action: {text}")
+            result = result.replace(match.group(0), text)
             continue
         aria.automation.type_text(text)
 
@@ -346,6 +414,8 @@ def execute_actions(aria, response, source_user_input=""):
         else:
             aria.automation.restart()
 
+    return result
+
 
 # ── Action Safety Verification ────────────────────────────────────────────────
 
@@ -354,8 +424,17 @@ def verify_action(aria, action_tag, sw, sh):
     # Risk classification using SandboxSafetyLayer
     risk_level = aria.sandbox_safety.classify_risk(action_tag)
 
+    # Determine user name to verify
+    user_to_verify = aria.known_user
+    is_remote = False
+    if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
+        if getattr(aria.firebase_sync, "current_command_id", None) is not None:
+            is_remote = True
+    if is_remote or (getattr(aria, "_reply_context", None) and getattr(aria._reply_context, "phone_only", False)):
+        user_to_verify = "chinmaya"
+
     # Centralized safety check using SecurityGuard
-    safe, msg = aria.security.verify_agent_action_tag(action_tag)
+    safe, msg = aria.security.verify_agent_action_tag(action_tag, user_name=user_to_verify)
     if not safe:
         return False, action_tag, msg
 

@@ -122,6 +122,18 @@ class Brain:
             
         self._sync_registry_status()
 
+        # Phase 4B: Start git commit watcher (daemon, non-blocking)
+        try:
+            from skills.git_monitor import GitMonitor
+            gm = GitMonitor()
+            gm.sync_commits_to_timeline()          # Initial sync on startup
+            gm.start_background_watcher(interval_seconds=300)  # Then poll every 5 min
+            print("[Brain] Git commit monitor started (5-min interval).")
+        except Exception as gm_err:
+            print(f"[Brain] Git monitor init failed (non-critical): {gm_err}")
+
+
+
     def _sync_registry_status(self):
         if not self.model_registry:
             return
@@ -475,7 +487,9 @@ class Brain:
     def _get_sqlite_context(self, user_name=None, current_task=None):
         import sqlite3
         from skills.memory_skill import MemorySkill
+        from skills.health_skill import HealthSkill
         MemorySkill()  # Ensure database schema is initialized
+        health_skill = HealthSkill()
         db_path = "aria_memory.db"
         
         # Identity segregation variables
@@ -709,9 +723,79 @@ class Brain:
             except Exception as we_err:
                 print(f"[Brain] Error loading strategy weights: {we_err}")
 
+            # 14. Fetch Health Metrics
+            health_str = ""
+            try:
+                latest_health = health_skill.get_latest_metrics()
+                if latest_health:
+                    health_summary = health_skill.generate_summary()
+                    health_str = f"== LATEST HEALTH METRICS ==\n{health_summary}"
+            except Exception as e:
+                print(f"[Brain/Health] Error loading health context: {e}")
+
             conn.close()
+
+            # Load active projects from aria_projects.json
+            projects_str = ""
+            projects_file = "aria_projects.json"
+            if os.path.exists(projects_file):
+                try:
+                    with open(projects_file, "r") as f:
+                        proj_data = json.load(f)
+                    act_proj = proj_data.get("active_projects", {})
+                    if act_proj:
+                        proj_lines = []
+                        for name, details in act_proj.items():
+                            completed = ", ".join(details.get("completed_tasks", []))
+                            pending_list = [t["task_name"] if isinstance(t, dict) else t for t in details.get("pending_tasks", [])]
+                            pending = ", ".join(pending_list)
+                            
+                            # Query project timeline momentum
+                            timeline_context = ""
+                            try:
+                                from skills.memory_skill import MemorySkill
+                                timeline_context = MemorySkill().get_project_timeline_context(name, limit=3)
+                            except Exception as te:
+                                print(f"[Brain/Timeline] Error loading timeline for '{name}': {te}")
+
+                            proj_str = (
+                                f"- Project: {name}\n"
+                                f"  Focus: {details.get('current_focus', 'None')}\n"
+                                f"  Status: {details.get('status', 'In Progress')}\n"
+                                f"  Tools: {', '.join(details.get('associated_tools', []))}\n"
+                                f"  Last Session Summary: {details.get('last_session_summary', 'None')}\n"
+                                f"  Next Recommended Action: {details.get('next_action', 'None')}\n"
+                                f"  Pending Tasks: {pending}\n"
+                                f"  Completed Tasks: {completed}"
+                            )
+                            if timeline_context:
+                                proj_str += f"\n  Timeline:\n" + "\n".join([f"    {l}" for l in timeline_context.strip().split("\n")])
+                            
+                            proj_lines.append(proj_str)
+                        projects_str = "\n".join(proj_lines)
+                except Exception as pe:
+                    print(f"[Brain/Projects] Error loading active projects: {pe}")
+            
+            # Load relationships from advanced knowledge graph
+            kb_graph_str = ""
+            try:
+                from skills.knowledge_graph import AriaSmartGraph
+                graph_obj = AriaSmartGraph()
+                # Query direct and indirect connections for target user
+                subgraph = graph_obj.query_subgraph(username=user_name_clean)
+                if subgraph:
+                    kb_lines = []
+                    for src_name, src_type, rel, tgt_name, tgt_type, conf in subgraph:
+                        kb_lines.append(f"- ({src_name}: {src_type}) --({rel})--> ({tgt_name}: {tgt_type}) (confidence: {conf:.2f})")
+                    kb_graph_str = "\n".join(kb_lines)
+            except Exception as kg_err:
+                print(f"[Brain/KBGraph] Error loading knowledge graph: {kg_err}")
             
             context_parts = []
+            if projects_str:
+                context_parts.append(f"== ACTIVE PROJECTS & GOALS ==\n{projects_str}")
+            if kb_graph_str:
+                context_parts.append(f"== USER KNOWLEDGE GRAPH (RELATIONSHIPS & ENTITIES) ==\n{kb_graph_str}")
             if notes_str:
                 context_parts.append(f"== PERSONAL MEMORY ==\n{notes_str}")
             if prefs_str:
@@ -740,6 +824,141 @@ class Brain:
                 context_parts.append(predictive_str)
             if relationship_str:
                 context_parts.append(relationship_str)
+            if health_str:
+                context_parts.append(health_str)
+
+            # Phase 4C: Project Health Scores
+            try:
+                from skills.project_health import ProjectHealthCalculator
+                health_context = ProjectHealthCalculator().get_health_context_string()
+                if health_context:
+                    context_parts.append(health_context)
+            except Exception as ph_err:
+                print(f"[Brain/ProjectHealth] Error loading health scores: {ph_err}")
+
+            # Phase 4D: Priority Engine Ranking
+            try:
+                from skills.priority_engine import PriorityEngine
+                priority_context = PriorityEngine().get_priority_briefing()
+                if priority_context:
+                    context_parts.append(priority_context)
+            except Exception as pe_err:
+                print(f"[Brain/PriorityEngine] Error loading priority ranking: {pe_err}")
+
+            # Phase 5A: Decision Engine Recommendation
+            try:
+                from skills.decision_engine import AriaDecisionEngine
+                engine = AriaDecisionEngine()
+                decision = engine.analyze_best_move()
+                decision_str = "== EXECUTIVE RECOMMENDED ACTION ==\n"
+                if decision["type"] == "CRITICAL_BLOCKER":
+                    decision_str += f"[EMERGENCY] Clear blocker on project '{decision['project']}'\n"
+                elif decision["type"] == "REST":
+                    decision_str += f"[REST] {decision['reason']}\n"
+                else:
+                    decision_str += f"Recommended Task: '{decision['task']}' (Project: {decision['project']})\n"
+                decision_str += f"Reasoning: {decision['reason']}"
+                context_parts.append(decision_str)
+            except Exception as de_err:
+                print(f"[Brain/DecisionEngine] Error loading best move: {de_err}")
+
+            # Phase 5B: Goal Drift Detector
+            try:
+                from skills.drift_detector import AriaDriftDetector
+                detector = AriaDriftDetector()
+                drifts = detector.analyze_drift(threshold_days=7)
+                if drifts:
+                    drift_str = "== CRITICAL SYSTEM ALERT: GOAL DRIFT ==\n"
+                    for item in drifts:
+                        drift_str += f" - Focus lapse: '{item['entity']}' has been stagnant for {item['days_idle']} days (Source: {item['last_tracked_via']}).\n"
+                    context_parts.append(drift_str.strip())
+            except Exception as dd_err:
+                print(f"[Brain/DriftDetector] Error checking drift: {dd_err}")
+
+            # Phase 5C: Sunday Weekly Review
+            try:
+                import datetime
+                if datetime.datetime.now().weekday() == 6:  # 6 is Sunday
+                    from skills.weekly_review import AriaWeeklyReview
+                    weekly_str = AriaWeeklyReview().compile_weekly_report()
+                    context_parts.append(weekly_str)
+            except Exception as wr_err:
+                print(f"[Brain/WeeklyReview] Error compiling weekly report: {wr_err}")
+
+            # Phase 6A: Risk Predictor
+            try:
+                from skills.risk_predictor import AriaRiskPredictor
+                predictor = AriaRiskPredictor()
+                risk_reports = predictor.analyze_all_risks()
+                
+                risk_str = "== CHIEF OF STAFF RISK PROJECTIONS ==\n"
+                has_high_risk = False
+                for report in risk_reports:
+                    if report["tier"] in ["ELEVATED", "CRITICAL"]:
+                        has_high_risk = True
+                        risk_str += f"[RISK ALERT] [{report['project']}] -> Tier: {report['tier']} (Score: {report['risk_score']}/1.0, Confidence: {report['confidence']})\n"
+                        for catalyst in report["catalysts"]:
+                            risk_str += f"   - {catalyst}\n"
+                        if report["trend_msg"]:
+                            risk_str += f"   - {report['trend_msg']}\n"
+                
+                if not has_high_risk:
+                    risk_str += "  - All active systems projecting stable operational vectors.\n"
+                
+                context_parts.append(risk_str.strip())
+            except Exception as rp_err:
+                print(f"[Brain/RiskPredictor] Error compiling risk reports: {rp_err}")
+
+            # Phase 6B: Opportunity Detector
+            try:
+                from skills.opportunity_detector import AriaOpportunityDetector
+                detector = AriaOpportunityDetector()
+                ideas = detector.log_and_rank_all()
+                if ideas:
+                    opp_str = "== CHIEF OF STAFF STRATEGIC OPPORTUNITIES ==\n"
+                    for opp in ideas[:2]:
+                        opp_str += f"💡 OPTIMIZATION MATCH: {opp['title']} (Type: {opp['type']}, Score: {opp['final_score']}/10)\n"
+                        opp_str += f"   - Strategy: {opp['description']}\n"
+                        nodes_list = json.loads(opp['source_nodes'])
+                        opp_str += f"   - Rationale: Verified intersection across: {', '.join(nodes_list)}.\n"
+                        
+                        # Register presentation log tracking parameters
+                        detector.record_presentation(
+                            opp['title'], opp['type'], opp['source_nodes'], 
+                            opp['confidence'], opp['impact']
+                        )
+                    context_parts.append(opp_str.strip())
+            except Exception as od_err:
+                print(f"[Brain/OpportunityDetector] Error compiling opportunities: {od_err}")
+
+            # Phase 6C: Strategic Reflection (Meta-Intelligence)
+            try:
+                from skills.strategic_reflection import AriaStrategicReflection
+                reflector = AriaStrategicReflection()
+                reflection_str = reflector.get_reflection_context_string()
+                if reflection_str:
+                    context_parts.append(reflection_str.strip())
+            except Exception as sr_err:
+                print(f"[Brain/StrategicReflection] Error building reflection summary: {sr_err}")
+
+            # Phase 6D: Personal OS (Life Intelligence)
+            try:
+                from skills.personal_os_reasoning import PersonalOSReasoningEngine
+                pos = PersonalOSReasoningEngine()
+                pressures = pos.compute_systemic_pressures()
+                
+                pos_str = "== PERSONAL OPERATING SYSTEM INTELLIGENCE ==\n"
+                pos_str += f"Systemic Pressures: [Academic: {pressures['academic_pressure']:.2f}/1.0 | Energy: {pressures['energy_pressure']:.2f}/1.0 | Routine: {pressures['routine_pressure']:.2f}/1.0]\n"
+                pos_str += f"Biological Energy Rating: {pressures['raw_energy_score']}/100 | Overall Life Load: {pressures['overall_life_load']:.2f}/1.0\n"
+                
+                if pressures["active_guards"]:
+                    pos_str += f"Active Operational Buffers: {', '.join(pressures['active_guards'])}\n"
+                else:
+                    pos_str += "Active Operational Buffers: None (Baseline execution parameters active)\n"
+                context_parts.append(pos_str.strip())
+            except Exception as pos_err:
+                print(f"[Brain/PersonalOS] Error building personal OS context: {pos_err}")
+
             context_parts.append(f"== WINDOW CONTEXT ==\n{act_str}")
             
             return "\n\n".join(context_parts)
@@ -1404,6 +1623,21 @@ To open VS Code project:    [VSCODE_OPEN: path]
                 from skills.memory_manager import MemoryManager
                 mm = MemoryManager()
                 mm.log_interaction(user_name, user_input, res)
+
+                # Start background Knowledge Graph relation extraction thread
+                import threading
+                def run_async_graph_extraction(user, u_in, a_rep):
+                    try:
+                        from skills.knowledge_graph import process_conversation_turn
+                        process_conversation_turn(user, u_in, a_rep)
+                    except Exception as ge_err:
+                        print(f"[Brain/Graph] Background relation extraction error: {ge_err}")
+
+                threading.Thread(
+                    target=run_async_graph_extraction,
+                    args=(user_name, user_input, res),
+                    daemon=True
+                ).start()
             except Exception as e:
                 print(f"[Brain/Memory] Interaction logging failed: {e}")
         return res
@@ -1681,9 +1915,17 @@ To open VS Code project:    [VSCODE_OPEN: path]
                             name_clean = "Chinmaya"
                         else:
                             name_clean = username_clean.capitalize()
-                        res = f"Yes, you're {name_clean}."
+                        res = f"Yes, I recognize you as {name_clean}."
                     else:
-                        res = "Unfortunately, I don't know who you are. You're currently in Guest Mode."
+                        res = "Unfortunately, I don't recognize you. You're currently in Guest Mode."
+
+                    # Guarantee response is spoken immediately before exiting the handler
+                    if aria:
+                        try:
+                            aria._speak(res)
+                            aria._identity_already_spoken = True
+                        except Exception as sp_err:
+                            print(f"[Brain/IdentityIntercept] Direct speak failed: {sp_err}")
 
                     self.chat_history.append({"role": "user", "content": user_input})
                     self.chat_history.append({"role": "assistant", "content": res})

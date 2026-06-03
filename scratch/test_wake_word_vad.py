@@ -34,18 +34,18 @@ class TestWakeWordVAD(unittest.TestCase):
             # Call is_human_speech with active_conversation=True
             with patch("builtins.print") as mock_print:
                 res_conv = v.is_human_speech(mock_audio, active_conversation=True)
-                # Should use CONVERSATION_VAD_THRESHOLD = 0.15
+                # Should use CONVERSATION_VAD_THRESHOLD = 0.08
                 args, kwargs = mock_print.call_args_list[-1]
                 log_msg = args[0]
-                self.assertIn("Threshold: 15.0%", log_msg)
+                self.assertIn("Threshold: 8.0%", log_msg)
                 
             # Call is_human_speech with active_conversation=False
             with patch("builtins.print") as mock_print:
                 res_idle = v.is_human_speech(mock_audio, active_conversation=False)
-                # Should use WAKE_VAD_THRESHOLD = 0.18
+                # Should use WAKE_VAD_THRESHOLD = 0.08
                 args, kwargs = mock_print.call_args_list[-1]
                 log_msg = args[0]
-                self.assertIn("Threshold: 18.0%", log_msg)
+                self.assertIn("Threshold: 8.0%", log_msg)
 
     @patch("speech_recognition.Microphone")
     @patch("speech_recognition.Recognizer")
@@ -66,10 +66,10 @@ class TestWakeWordVAD(unittest.TestCase):
         # Trigger wake-word listening
         v.listen_for_wake_word(timeout=3)
         
-        # Verify is_human_speech was called with min_ratio=0.18
+        # Verify is_human_speech was called with min_ratio=0.08
         mock_human_speech.assert_called_once()
         kwargs = mock_human_speech.call_args[1]
-        self.assertEqual(kwargs.get("min_ratio"), 0.18)
+        self.assertEqual(kwargs.get("min_ratio"), 0.08)
         self.assertEqual(kwargs.get("active_conversation"), False)
 
 if __name__ == "__main__":

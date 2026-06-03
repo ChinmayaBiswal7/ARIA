@@ -19,6 +19,7 @@ import time
 import threading
 import re
 import datetime
+import json
 import cv2
 import pygame
 
@@ -36,6 +37,7 @@ from skills.memory_skill import MemorySkill
 from skills.context_skill import ContextSkill
 from skills.workspace_skill import WorkspaceSkill
 from skills.firebase_sync import FirebaseSync
+from skills.image_gen import ImageGenerator
 
 # New Cognitive Core additions
 from skills.sandbox_safety import SandboxSafetyLayer
@@ -153,6 +155,7 @@ class ARIA:
         WAKE_WORDS = ["aria", "hey aria", "ok aria", "hello aria", "oi aria"]
 
     def __init__(self):
+        self._cleanup_done = False
         self.voice      = None
         self.brain      = None
         self.camera     = None
@@ -165,8 +168,11 @@ class ARIA:
         self.known_user_confidence = "none"
         self.face_match_history = []    # Rolling history of matches for temporal smoothing
         self.last_identity_match_time = 0.0  # Timestamp of the last high-confidence match
+        self.last_welcome_time = 0.0         # Timestamp of last spoken welcome back greeting
         self.presence_state = "USER_LEFT"
         self.last_background_perception_time = 0.0
+        self.owner_last_seen_time = 0.0
+        self.last_presence_state_logged = None
         self.current_user_emotion = "neutral"
         self.current_user_emotion_confidence = 1.0
         self.emotion_history = []
@@ -197,6 +203,7 @@ class ARIA:
         self.ar_playground = None
         self.ar_mode = False
         self._dismissed_goals = set()  # Goals dismissed this session — never re-surface
+        self.image_gen_mode = False
 
     def initialize(self):
         print("\n" + "="*50)
@@ -320,6 +327,7 @@ class ARIA:
         self.context_skill = ContextSkill()
         self.workspace_skill = WorkspaceSkill(self.memory_skill, self.automation, self.screen)
         self.firebase_sync = FirebaseSync(command_callback=self._handle_input)
+        self.image_gen = ImageGenerator(aria=self)
 
         # New Cognitive Core Plugins Instantiation
         self.sandbox_safety = SandboxSafetyLayer()
@@ -384,6 +392,22 @@ class ARIA:
             print("[ARIA Scheduler] Proactive Background Cognition Loop active.")
         except Exception as se:
             print(f"[ARIA Scheduler] Could not start proactive scheduler: {se}")
+
+        # Start Face-Wake Background Loop
+        try:
+            face_wake_thread = threading.Thread(target=self._run_face_wake_loop, name="ARIA-FaceWake", daemon=True)
+            face_wake_thread.start()
+            print("[ARIA] Face-Wake background loop successfully running.")
+        except Exception as fwe:
+            print(f"[ARIA] Could not start face wake loop: {fwe}")
+
+        # Start Window Monitor Background Loop
+        try:
+            window_monitor_thread = threading.Thread(target=self._run_window_monitor_loop, name="ARIA-WindowMonitor", daemon=True)
+            window_monitor_thread.start()
+            print("[ARIA] Window-Monitor background loop successfully running.")
+        except Exception as wme:
+            print(f"[ARIA] Could not start window monitor loop: {wme}")
         
         # Check for unfinished sessions and prompt to Resume
         try:
@@ -545,8 +569,10 @@ class ARIA:
             self._speak("An error occurred during replay execution.")
 
     # ── Background Scheduler Loop ─────────────────────────────────────────────
-    def _speak(self, text):
-        return skills.voice_session_commands.speak(self, text)
+    def _speak(self, text, source=None, allow_barge_in=True):
+        if source is None:
+            source = getattr(self._reply_context, "input_source", None)
+        return skills.voice_session_commands.speak(self, text, source=source, allow_barge_in=allow_barge_in)
 
     def _sanitize_spoken_text(self, text):
         return skills.voice_session_commands.sanitize_spoken_text(self, text)
@@ -575,16 +601,21 @@ class ARIA:
         
         now = time.time()
         
-        # 1. Identity persistence lock check (30 seconds)
-        # If we have a confidently identified user within the last 30s, do a fast check using 1 frame
-        if self.known_user and self.known_user != "Unknown" and self.known_user_confidence == "high" and (now - self.last_identity_match_time < 30.0):
+        # 0. Cache identity check: If owner was detected recently (last 30s) and confidence is high/medium, reuse it to save CPU
+        if self.known_user and self.known_user != "Unknown" and self.known_user_confidence in ["high", "medium"] and (now - self.last_identity_match_time < 30.0):
+            self.owner_last_seen_time = now
+            return self.known_user
+            
+        # 1. Identity persistence lock check (3 minutes)
+        # If we have a verified user within the last 180s, do a fast check using 1 frame
+        if self.known_user and self.known_user != "Unknown" and self.known_user_confidence in ["high", "medium"] and (now - self.last_identity_match_time < 180.0):
             arr = self.camera.capture_frame_raw()  # BGR numpy — correct for FaceEmbedder
             if arr is not None:
                 try:
                     emb = self.memory.memory_manager.embedder.get_embedding(arr)
                     if emb:
                         name, similarity = self.memory.memory_manager.identify_user(
-                            threshold=0.63, 
+                            threshold=0.65, 
                             return_confidence=True, 
                             embedding=emb
                         )
@@ -593,6 +624,10 @@ class ARIA:
                             self.last_identity_match_time = now
                             self.known_user_similarity = similarity
                             
+                            # Continuous face learning update (Delegated to MemoryManager)
+                            if name in ["chinmay", "chinmaya"]:
+                                self.memory.memory_manager.add_face_embedding_to_cluster(name, emb, similarity)
+
                             # Keep temporal history buffer healthy
                             self.face_match_history.append((name, similarity))
                             if len(self.face_match_history) > 5:
@@ -656,12 +691,16 @@ class ARIA:
         try:
             # 4. Query ChromaDB with averaged embedding
             name, similarity = self.memory.memory_manager.identify_user(
-                threshold=0.63, 
+                threshold=0.65, 
                 return_confidence=True, 
                 embedding=avg_emb.tolist()
             )
             
             if name != "Unknown":
+                # Continuous face learning update (Delegated to MemoryManager)
+                if name in ["chinmay", "chinmaya"]:
+                    self.memory.memory_manager.add_face_embedding_to_cluster(name, avg_emb.tolist(), similarity)
+
                 # 5. Add to temporal history buffer
                 self.face_match_history.append((name, similarity))
                 if len(self.face_match_history) > 5:
@@ -689,6 +728,8 @@ class ARIA:
                     self.known_user_confidence = "medium"
                 else:
                     self.known_user_confidence = "low"
+                if name in ["chinmay", "chinmaya"]:
+                    self.owner_last_seen_time = time.time()
                 return name
             else:
                 # Face identified as Unknown -> clear identity
@@ -706,9 +747,8 @@ class ARIA:
     def _get_current_emotion(self) -> str:
         """
         Gets current user emotion from:
-        1. Latest face detection (Moondream)
-        2. Falls back to neutral if unavailable
-        Uses a 30-second cache to minimize vision query latency.
+        1. Prioritizes recent voice emotion (from voice analyzer) if captured within the last 30s.
+        2. Otherwise, returns the latest background-detected user emotion (never blocks the main thread).
         """
         now = time.time()
         # 1. Prioritize recent voice emotion if it is not neutral and was captured within the last 30s
@@ -726,59 +766,8 @@ class ARIA:
                         print(f"[Emotion] Failed to store voice emotion event: {err}")
                     return ve
 
-        # 2. Return cached emotion if recent
-        if hasattr(self, "_last_emotion_time") and hasattr(self, "_last_emotion"):
-            if now - self._last_emotion_time < 30.0:
-                # Return cached emotion
-                return self._last_emotion
-
-        emotion = "neutral"
-        try:
-            if not self.camera or not self.camera.available:
-                return "neutral"
-            
-            img = self.camera.capture_image()
-            if img is None:
-                return "neutral"
-                
-            import numpy as np
-            import cv2
-            import io
-            import base64
-            
-            arr = np.array(img)
-            if len(arr.shape) == 2 or arr.shape[2] == 1:
-                gray = arr
-                img_rgb = img.convert("RGB")
-            else:
-                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-                img_rgb = img
-                
-            faces = self.memory.face_cascade.detectMultiScale(gray, 1.3, 5)
-            if len(faces) == 0:
-                emotion = "neutral"
-            else:
-                x, y, w, h = faces[0]
-                face_img = img_rgb.crop((x, y, x + w, y + h))
-                
-                face_buf = io.BytesIO()
-                face_img.save(face_buf, format="PNG")
-                face_b64 = base64.b64encode(face_buf.getvalue()).decode("utf-8")
-                
-                prompt = "Describe the emotion or facial expression of the person in this face crop."
-                if self.brain.vision_ready:
-                    description = self.brain._ask_vision(face_b64, prompt)
-                    if description:
-                        emotion = self._parse_emotion(description)
-                        self._store_emotion_event(emotion)
-                        self._update_emotion_history(emotion)
-        except Exception as e:
-            print(f"[Emotion] Detection failed: {e}")
-            emotion = "neutral"
-            
-        self._last_emotion = emotion
-        self._last_emotion_time = now
-        return emotion
+        # 2. Return the latest background-detected user emotion
+        return getattr(self, "current_user_emotion", "neutral")
 
     def _parse_emotion(self, description: str) -> str:
         """
@@ -896,8 +885,92 @@ class ARIA:
                     "You seem to be feeling better! Good to see."
                 )
 
+    def update_presence_state(self):
+        """Update wake_mode and access permissions based on owner presence timer."""
+        now = time.time()
+        time_since_owner = now - getattr(self, "owner_last_seen_time", 0.0)
+        
+        # Determine presence state
+        if time_since_owner < 300.0:  # 0-5 mins
+            state = "OWNER_ACTIVE"
+            self.wake_mode = True  # Wake-word-free mode enabled
+        elif time_since_owner < 900.0:  # 5-15 mins
+            state = "OWNER_IDLE"
+            self.wake_mode = False  # Require wake-word again
+        else:  # 15+ mins
+            state = "GUEST_MODE"
+            self.wake_mode = False
+            # Clear known user if they were owner to drop to guest permissions
+            if self.known_user in ["chinmay", "chinmaya"]:
+                self.known_user = "Unknown"
+                self.known_user_confidence = "none"
+                self.known_user_similarity = 0.0
+
+        if getattr(self, "last_presence_state_logged", None) != state:
+            print(f"[PresenceEngine] State Transition: {getattr(self, 'last_presence_state_logged', 'None')} -> {state} (Time since owner: {time_since_owner:.1f}s)")
+            self.last_presence_state_logged = state
+            
+        return state
+
+    def _run_face_wake_loop(self):
+        """Runs a dedicated background loop to detect the owner's face and wake up the system if detected."""
+        print("[PresenceEngine] Dedicated Face-Wake Loop started.")
+        import time
+        while self.running:
+            try:
+                # Yield CPU priorities: If voice session is active, slow down checking frequency
+                if self.voice and (self.voice.is_speaking or getattr(self.voice, "vad_detecting_speech", False)):
+                    time.sleep(3.0)
+                    continue
+
+                # Check if camera is available and we are NOT in active conversation
+                if self.camera and self.camera.available and not self.conversation_session.is_active():
+                    now_t = time.time()
+                    is_owner_active = (self.known_user in ["chinmay", "chinmaya"] and (now_t - getattr(self, "last_identity_match_time", 0.0) < 180.0))
+                    if is_owner_active:
+                        if now_t - getattr(self, "last_face_wake_check_time", 0.0) < 10.0:
+                            time.sleep(1.0)
+                            continue
+                        self.last_face_wake_check_time = now_t
+                    
+                    # Capture raw BGR frame
+                    arr = self.camera.capture_frame_raw()
+                    if arr is not None:
+                        import cv2
+                        gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+                        faces = self.memory.face_cascade.detectMultiScale(gray, 1.1, 4)
+                        if len(faces) > 0:
+                            # Try to identify the user
+                            detected = self.identify_user()
+                            if detected in ["chinmay", "chinmaya"]:
+                                self.owner_last_seen_time = time.time()
+                                self.known_user = detected
+                                self.known_user_confidence = "high"
+                                
+                                now_t = time.time()
+                                if now_t - getattr(self, "last_face_wake_trigger_time", 0.0) > 30.0:
+                                    self.last_face_wake_trigger_time = now_t
+                                    self.last_identity_match_time = now_t
+                                    
+                                    # Greet with cooldown of 30 minutes (1800s)
+                                    if now_t - getattr(self, "last_welcome_time", 0.0) > 1800.0:
+                                        print(f"[PresenceEngine] Owner '{detected}' detected by camera. Greeting owner and auto-waking conversation!")
+                                        self.last_welcome_time = now_t
+                                        self._mark_conversation_activity(wake_reason="face_detection")
+                                        self._speak("Welcome back, Chinmaya.", allow_barge_in=False)
+                                    else:
+                                        print(f"[PresenceEngine] Owner '{detected}' detected by camera. Silent wake-up / match refreshed.")
+            except Exception as e:
+                print(f"[PresenceEngine] Error in face wake loop: {e}")
+            time.sleep(2.0)
+
     def _run_background_perception(self):
         """Runs periodic background webcam scans to detect presence and emotions."""
+        # Yield CPU priorities: If voice session is active, delay check and return immediately
+        if self.voice and (self.voice.is_speaking or getattr(self.voice, "vad_detecting_speech", False)):
+            self.last_background_perception_time = time.time() - 50.0  # check again in 10s (slow poll) instead of 60s
+            return
+
         self.last_background_perception_time = time.time()
 
         # Privacy Zone check
@@ -926,7 +999,7 @@ class ARIA:
         
         faces = []
         try:
-            faces = self.memory.face_cascade.detectMultiScale(gray, 1.3, 5)
+            faces = self.memory.face_cascade.detectMultiScale(gray, 1.1, 4)
         except Exception as e:
             print(f"[BackgroundPerception] Face detection error: {e}")
 
@@ -937,27 +1010,39 @@ class ARIA:
             return
 
         user = self.known_user or "chinmaya"
-        try:
-            emb = self.memory.memory_manager.embedder.get_embedding(arr)
-            if emb:
-                name, similarity = self.memory.memory_manager.identify_user(
-                    threshold=0.63, 
-                    return_confidence=True, 
-                    embedding=emb
-                )
-                if name != "Unknown":
-                    user = name
-                    self.known_user = name
-                    self.known_user_similarity = similarity
-                    if similarity >= 0.85:
-                        self.known_user_confidence = "high"
-                        self.last_identity_match_time = time.time()
-                    elif similarity >= 0.75:
-                        self.known_user_confidence = "medium"
-                    else:
-                        self.known_user_confidence = "low"
-        except Exception as id_err:
-            print(f"[BackgroundPerception] Identity match error: {id_err}")
+        # Skip face recognition embedding if we matched recently (within 30s)
+        if self.known_user and self.known_user != "Unknown" and self.known_user_confidence in ["high", "medium"] and (time.time() - self.last_identity_match_time < 30.0):
+            user = self.known_user
+            print(f"[BackgroundPerception] Using cached user identity '{user}' (detected {time.time() - self.last_identity_match_time:.1f}s ago). Skipping FaceEmbedder.")
+        else:
+            try:
+                emb = self.memory.memory_manager.embedder.get_embedding(arr)
+                if emb:
+                    name, similarity = self.memory.memory_manager.identify_user(
+                        threshold=0.65, 
+                        return_confidence=True, 
+                        embedding=emb
+                    )
+                    if name != "Unknown":
+                        user = name
+                        self.known_user = name
+                        self.known_user_similarity = similarity
+                        
+                        # Continuous face learning update (Delegated to MemoryManager)
+                        if name in ["chinmay", "chinmaya"]:
+                            self.memory.memory_manager.add_face_embedding_to_cluster(name, emb, similarity)
+
+                        if similarity >= 0.85:
+                            self.known_user_confidence = "high"
+                            self.last_identity_match_time = time.time()
+                        elif similarity >= 0.75:
+                            self.known_user_confidence = "medium"
+                        else:
+                            self.known_user_confidence = "low"
+                        if name in ["chinmay", "chinmaya"]:
+                            self.owner_last_seen_time = time.time()
+            except Exception as id_err:
+                print(f"[BackgroundPerception] Identity match error: {id_err}")
 
         matched_emotion = "neutral"
         try:
@@ -1022,6 +1107,100 @@ class ARIA:
                 self.presence_state = "USER_IDLE"
 
         print(f"[BackgroundPerception] Presence: {self.presence_state}, Emotion: {self.current_user_emotion}")
+
+
+    def _run_window_monitor_loop(self):
+        """Monitors the active window and triggers proactive reminders for projects after dwell time."""
+        print("[WindowMonitor] Continuous awareness loop started.")
+        cooldowns = {}  # project_name -> timestamp of last voice alert
+        focus_start_times = {}  # project_name -> timestamp when window focus started
+        alerted_this_focus = {}  # project_name -> bool
+
+        while self.running:
+            try:
+                time.sleep(3.0)
+                
+                # Check active projects JSON
+                projects_file = "aria_projects.json"
+                if not os.path.exists(projects_file):
+                    continue
+                    
+                with open(projects_file, "r") as f:
+                    projects_data = json.load(f)
+                
+                active_projects = projects_data.get("active_projects", {})
+                if not active_projects:
+                    continue
+
+                # Get the title of the active window on screen
+                current_window = self.context_skill.get_active_window()
+                if not current_window:
+                    focus_start_times.clear()
+                    alerted_this_focus.clear()
+                    continue
+                
+                matched_proj_name = None
+                matched_tool = None
+                matched_focus = None
+                matched_last_session = None
+                matched_next_action = None
+                
+                for proj_name, details in active_projects.items():
+                    for tool in details.get("associated_tools", []):
+                        if tool.lower() in current_window.lower():
+                            matched_proj_name = proj_name
+                            matched_tool = tool
+                            matched_focus = details.get("current_focus", "unknown focus")
+                            matched_last_session = details.get("last_session_summary", "")
+                            matched_next_action = details.get("next_action", "")
+                            break
+                    if matched_proj_name:
+                        break
+                
+                if matched_proj_name:
+                    now = time.time()
+                    
+                    # Clean up other projects' timers
+                    for p in list(focus_start_times.keys()):
+                        if p != matched_proj_name:
+                            focus_start_times.pop(p, None)
+                            alerted_this_focus.pop(p, None)
+                            
+                    if matched_proj_name not in focus_start_times:
+                        focus_start_times[matched_proj_name] = now
+                        alerted_this_focus[matched_proj_name] = False
+                        print(f"[WindowMonitor] Detected focus on tool '{matched_tool}' for project '{matched_proj_name}'. Dwell timer started.")
+                    else:
+                        duration = now - focus_start_times[matched_proj_name]
+                        if duration >= 20.0 and not alerted_this_focus.get(matched_proj_name, False):
+                            last_alert = cooldowns.get(matched_proj_name, 0.0)
+                            # 30 minutes cooldown (1800 seconds)
+                            if now - last_alert > 1800.0:
+                                # Ensure user is idle relative to ARIA conversation
+                                time_since_last_interaction = now - self.last_interaction_time
+                                _speaking = self.voice is not None and getattr(self.voice, 'is_speaking', False)
+                                
+                                if time_since_last_interaction >= 20.0 and not _speaking and self.speech_queue.empty():
+                                    prompt_parts = []
+                                    prompt_parts.append(f"I noticed you've been working in {matched_tool} for a bit.")
+                                    if matched_last_session:
+                                        prompt_parts.append(f"Last session, you {matched_last_session}.")
+                                    if matched_next_action:
+                                        prompt_parts.append(f"The next recommended action is {matched_next_action}.")
+                                    prompt_parts.append("Would you like to continue from there?")
+                                    
+                                    prompt = " ".join(prompt_parts)
+                                    print(f"\n[WindowMonitor Alert] Proactive speech: {prompt}")
+                                    
+                                    cooldowns[matched_proj_name] = now
+                                    alerted_this_focus[matched_proj_name] = True
+                                    self._speak(prompt, allow_barge_in=True)
+                else:
+                    focus_start_times.clear()
+                    alerted_this_focus.clear()
+                    
+            except Exception as e:
+                print(f"[WindowMonitor] Error: {e}")
 
 
     # ── Action Execution (delegated to skills/autonomous_agent_commands.py) ──
@@ -1404,11 +1583,40 @@ class ARIA:
 
     def _handle_input(self, user_input, image=None, remote=False):
         """Process one utterance from the user."""
+        # Security authorization check for local inputs (microphone speech / console typing)
+        if not remote:
+            now = time.time()
+            is_owner = (self.known_user in ["chinmay", "chinmaya"] and (now - getattr(self, "last_identity_match_time", 0.0) < 180.0))
+            
+            # If identity match expired, perform active camera verification
+            if not is_owner:
+                print("[SecurityGuard] Local input received. Actively verifying speaker identity via camera...")
+                detected = self.identify_user()
+                if detected in ["chinmay", "chinmaya"]:
+                    print(f"[SecurityGuard] Identity verified as '{detected}'. Access granted.")
+                    self.known_user = detected
+                    self.known_user_confidence = "high"
+                    self.last_identity_match_time = now
+                    self.owner_last_seen_time = now
+                else:
+                    print(f"[SecurityGuard] Access Denied. Speaker identified as '{detected}', not recognized as owner.")
+                    self._speak("Unauthorized person.")
+                    return
+
+        if self.known_user in ["chinmay", "chinmaya"]:
+            self.owner_last_seen_time = time.time()
+            
         previous_phone_only = getattr(self._reply_context, "phone_only", False)
         self._reply_context.phone_only = remote
+        
+        # Track input source in threading.local for thread-safe access
+        source = "phone" if remote else "laptop"
+        previous_source = getattr(self._reply_context, "input_source", None)
+        self._reply_context.input_source = source
+        
         self._spoken_during_turn = []
         try:
-            return self._handle_input_impl(user_input, image=image)
+            return self._handle_input_impl(user_input, image=image, source=source)
         finally:
             try:
                 if hasattr(self, "_spoken_during_turn") and self._spoken_during_turn:
@@ -1433,6 +1641,7 @@ class ARIA:
             finally:
                 self._spoken_during_turn = None
                 self._reply_context.phone_only = previous_phone_only
+                self._reply_context.input_source = previous_source
 
     def _translate_hindi_to_english(self, text):
         try:
@@ -1478,7 +1687,7 @@ class ARIA:
                 print("[Camera] No active camera consumer. Releasing camera to turn it off.")
                 self.camera.release()
 
-    def _handle_input_impl(self, user_input, image=None):
+    def _handle_input_impl(self, user_input, image=None, source=None):
         """Process one utterance from the user."""
         self._mark_conversation_activity(wake_reason="user_input")
 
@@ -1495,11 +1704,13 @@ class ARIA:
         inp = user_input.strip().lower()
         if hasattr(self, 'brain') and self.brain and getattr(self.brain, 'semantic_router', None) and self.brain.semantic_router.normalizer:
             try:
-                normalized_val, _ = self.brain.semantic_router.normalizer.normalize(user_input)
-                # Strip terminal punctuation for trigger matching ease
-                inp = normalized_val.strip().lower().rstrip('.!?')
+                result = self.brain.semantic_router.normalizer.normalize(user_input)
+                # Safely unpack — only if result is a proper 2-tuple of strings
+                if isinstance(result, (list, tuple)) and len(result) == 2 and isinstance(result[0], str):
+                    normalized_val = result[0]
+                    inp = normalized_val.strip().lower().rstrip('.!?')
             except Exception as norm_err:
-                print(f"[Main] Query normalization failed: {norm_err}")
+                pass  # Normalization is a best-effort enhancement; fall back to raw inp
 
         # Update relationship metrics based on specific user feedback loops
         if getattr(self, "known_user", None):
@@ -1561,8 +1772,39 @@ class ARIA:
             except Exception as e:
                 print(f"[Main] Watchdog check error: {e}")
 
+        # ── Image Generation Mode ──────────────────────────
+        if re.search(
+            r"(enable|start|open|activate)\s+image\s*gen",
+            user_input.lower()
+        ):
+            self.image_gen_mode = True
+            self._speak(
+                "Image generation mode active. "
+                "Tell me what to generate."
+            )
+            return
+
+        if re.search(
+            r"(disable|stop|close|deactivate)\s+image\s*gen",
+            user_input.lower()
+        ):
+            self.image_gen_mode = False
+            self._speak("Image generation mode disabled.")
+            return
+
+        if self.image_gen_mode:
+            prompt = user_input.strip()
+            print(f"[ImageGen] Mode active. Generating: '{prompt}'")
+            threading.Thread(
+                target=self.image_gen.generate_or_load,
+                args=(prompt,),
+                daemon=True
+            ).start()
+            return
+        # ───────────────────────────────────────────────────
+
         # Route through modular dispatcher
-        from skills.command_router import handle_system, handle_ar, handle_browser, handle_identity, handle_memory
+        from skills.command_router import handle_system, handle_ar, handle_browser, handle_identity, handle_memory, handle_chief_of_staff
 
         image_param = image
         res = handle_system(self, inp, user_input, image=image_param)
@@ -1578,6 +1820,9 @@ class ARIA:
         if res.get("handled"):
             return
         res = handle_memory(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_chief_of_staff(self, inp, user_input, image=image_param)
         if res.get("handled"):
             return
 
@@ -1626,17 +1871,21 @@ class ARIA:
                 webbrowser.open(url)
                 return
 
-        # ─ Detect current user from camera ─
-        detected_name = self._detect_user()
-        if detected_name:
-            prev_user = self.known_user
-            self.known_user = detected_name
-            set_user(detected_name)
-            if self.startup_greeting_done and detected_name != prev_user and detected_name not in self._greeted_users:
-                self._greeted_users.add(detected_name)
-                self._last_greeted_face = detected_name
-                self._speak(f"Hi {detected_name}, welcome!")
-                return
+        # ─ Detect current user from camera (skip if owner recently verified) ─
+        is_owner_currently_active = (self.known_user in ["chinmay", "chinmaya"] and (time.time() - getattr(self, "last_identity_match_time", 0.0) < 180.0))
+        if not is_owner_currently_active:
+            detected_name = self._detect_user()
+            if detected_name:
+                prev_user = self.known_user
+                self.known_user = detected_name
+                set_user(detected_name)
+                if self.startup_greeting_done and detected_name != prev_user and detected_name not in self._greeted_users:
+                    self._greeted_users.add(detected_name)
+                    self._last_greeted_face = detected_name
+                    self._speak(f"Hi {detected_name}, welcome!")
+                    return
+        else:
+            print(f"[Main] Owner '{self.known_user}' is active (timer: {time.time() - self.last_identity_match_time:.1f}s). Skipping active face re-detection.")
 
         # ─ Visual inputs ─
         image_input = image
@@ -1674,7 +1923,7 @@ class ARIA:
             if clean:
                 spoken_via_stream.append(clean)
                 set_state("SPEAKING")
-                self._speak(clean)
+                self._speak(clean, source=source)
 
         self.brain._stream_callback = _on_streamed_sentence
 
@@ -1705,15 +1954,20 @@ class ARIA:
             )
 
         # ─ Execute action tags ─
-        self._execute_actions(response, source_user_input=user_input)
+        response = self._execute_actions(response, source_user_input=user_input)
 
-        # ─ Speak clean response — skip if streaming already spoke it ─
-        if not spoken_via_stream:
+        # ─ Speak clean response — skip if streaming already spoke it or if identity was spoken directly ─
+        if not spoken_via_stream and not getattr(self, "_identity_already_spoken", False):
             spoken = re.sub(r'\[[A-Z]+:[^\]]*\]', '', response or "")  # remove [TAG: value] tokens
             spoken = re.sub(r'\[[A-Z]+\]', '', spoken)                  # remove bare [TAG] tokens
             spoken = spoken.strip()
             if spoken:
-                self._speak(spoken)
+                print(f"[TTS] About to speak: {spoken[:100]}")
+                self._speak(spoken, source=source)
+        
+        # Clear the identity spoken flag
+        if hasattr(self, "_identity_already_spoken"):
+            delattr(self, "_identity_already_spoken")
 
         if is_search and not is_site_scoped_search:
             # Extract query from response
@@ -1852,6 +2106,9 @@ class ARIA:
 
     def cleanup(self):
         """Cleanly release all ARIA resources."""
+        if getattr(self, "_cleanup_done", False):
+            return
+        self._cleanup_done = True
         print("[ARIA] Releasing resources...")
         try:
             from skills.browser_skill import BrowserSkill
@@ -1949,7 +2206,12 @@ class ARIA:
         else:
             greeting = "ARIA online. How can I help you?"
 
-        self._speak(greeting)
+        # Cooldown check to prevent race-condition duplicate greetings with Face-Wake loop
+        if time.time() - getattr(self, "last_welcome_time", 0.0) > 1800.0:
+            self.last_welcome_time = time.time()
+            self._speak(greeting, allow_barge_in=False)
+        else:
+            print("[ARIA] Skipping duplicate startup greeting. Already greeted owner recently.")
         self.startup_greeting_done = True
 
         print("\n[ARIA] Entering main loop.")
@@ -1961,6 +2223,7 @@ class ARIA:
 
         while self.running:
             try:
+                self.update_presence_state()
                 # Reset AR playground state if it has stopped
                 if self.ar_playground and not self.ar_playground._running:
                     print("[ARIA] AR Playground has stopped. Resetting state flags.")
@@ -2011,18 +2274,20 @@ class ARIA:
                         print("[ARIA] Conversation window expired. Returning to Sleep Mode (Wake-word only).")
                     self._was_in_conversation = in_conversation
 
+                    is_owner_active = (self.known_user in ["chinmay", "chinmaya"] and (time.time() - getattr(self, "last_identity_match_time", 0.0) < 180.0))
+
                     if self.wake_mode:
                         # ── Always-On Mode ──────────────────────────────────
                         set_state("LISTENING")
                         set_text("Listening... speak anytime.")
-                        user_input = self.voice.listen(timeout=5, phrase_time_limit=20, active_conversation=in_conversation)
-                        if user_input:
-                            if not self.voice.is_valid_speech(user_input, active_conversation=in_conversation):
+                        user_input = self.voice.listen(timeout=5, phrase_time_limit=20, active_conversation=in_conversation or is_owner_active)
+                        if user_input and self.running:
+                            if not self.voice.is_valid_speech(user_input, active_conversation=in_conversation or is_owner_active):
                                 continue
                             
                             # Gating check: must contain wake word OR be within follow-up window
                             has_wake = any(w in user_input.lower() for w in self.WAKE_WORDS)
-                            if in_conversation or has_wake:
+                            if in_conversation or has_wake or is_owner_active:
                                 self._mark_conversation_activity(wake_reason="wake_word" if has_wake else "followup")
                                 self._handle_input(user_input)
                             else:
@@ -2030,12 +2295,15 @@ class ARIA:
 
                     else:
                         # ── Wake-Word Mode ─────────────────────────────────────
-                        if in_conversation:
-                            # Continue conversation without repeating wake word
+                        if in_conversation or is_owner_active:
+                            # Continue conversation or listen because owner is active
                             set_state("LISTENING")
-                            set_text("Listening (active conversation)...")
+                            if is_owner_active and not in_conversation:
+                                set_text("Listening (Owner active, no wake word needed)...")
+                            else:
+                                set_text("Listening (active conversation)...")
                             user_input = self.voice.listen(timeout=6, phrase_time_limit=15, active_conversation=True)
-                            if user_input:
+                            if user_input and self.running:
                                 if self.voice.is_valid_speech(user_input, active_conversation=True):
                                     self._mark_conversation_activity(wake_reason="active_followup")
                                     self._handle_input(user_input)
@@ -2048,7 +2316,7 @@ class ARIA:
                             set_state("IDLE")
                             set_text("Say 'Hey ARIA' to activate...")
                             detected = self.voice.listen_for_wake_word(self.WAKE_WORDS, timeout=3)
-                            if detected:
+                            if detected and self.running:
                                 set_state("LISTENING")
                                 print(f"[ARIA] Wake word detected: '{detected}'")
                             
@@ -2071,14 +2339,14 @@ class ARIA:
                                 self._mark_conversation_activity(wake_reason="wake_word")
                                 self._was_in_conversation = True
 
-                                if remaining_input:
+                                if remaining_input and self.running:
                                     print(f"[ARIA] Processing immediate query: '{remaining_input}'")
                                     if self.voice.is_valid_speech(remaining_input, active_conversation=True):
                                         self._handle_input(remaining_input)
                                 else:
                                     set_text("Go ahead, I am listening...")
                                     user_input = self.voice.listen(timeout=8, phrase_time_limit=15, active_conversation=True)
-                                    if user_input:
+                                    if user_input and self.running:
                                         if self.voice.is_valid_speech(user_input, active_conversation=True):
                                             self._handle_input(user_input)
                                         else:
@@ -2452,6 +2720,13 @@ def main():
         if aria_instance:
             print("[ShutdownCoordinator] Stopping agent loop...")
             aria_instance.running = False
+            
+            # Upload pending generated images to Firebase Storage on shutdown
+            if hasattr(aria_instance, 'image_gen') and hasattr(aria_instance, 'firebase_sync') and aria_instance.firebase_sync:
+                try:
+                    aria_instance.firebase_sync.upload_pending_images(aria_instance.image_gen)
+                except Exception as ex:
+                    print(f"[ShutdownCoordinator] Failed uploading pending images: {ex}")
             try:
                 # Commit the in-memory relationship vector state to SQLite only upon clean exit
                 if getattr(aria_instance, "known_user", None):
@@ -2484,7 +2759,8 @@ def main():
         # Free any cloud model temp files that were active
         try:
             from skills.model_cloud_manager import ModelCloudManager
-            ModelCloudManager().free_all_temps()
+            if getattr(ModelCloudManager, "_instance", None) is not None:
+                ModelCloudManager._instance.free_all_temps()
         except Exception:
             pass
 

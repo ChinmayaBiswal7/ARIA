@@ -14,6 +14,11 @@ class TestActionGuardBypass(unittest.TestCase):
         self.agent = ARIA()
         self.agent.brain = MagicMock()
         self.agent.brain.last_routing_decision = None
+        
+        # Patch is_browser_active to return False by default for these tests to prevent test pollution
+        patcher = patch('skills.browser_skill.BrowserSkill.is_browser_active', return_value=False)
+        self.mock_is_active = patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_unauthorized_when_no_routing_decision_and_no_keyword(self):
         # Case 1: Query is "Amazon", category is "OPEN", no routing decision

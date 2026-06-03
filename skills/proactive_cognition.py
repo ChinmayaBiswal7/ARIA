@@ -148,6 +148,44 @@ class ProactiveCognition:
 
         return None
 
+    def generate_idle_memory_suggestion(self, aria_instance, username) -> Optional[str]:
+        """
+        Formulates a proactive follow-up question based on the user's recent tasks 
+        retrieved from episodic memory when the user is idle.
+        """
+        try:
+            # Query recent episodic memories (e.g. 15 events)
+            recent_episodes = aria_instance.episodic_memory.get_recent(username=username, n=15)
+            if not recent_episodes:
+                return None
+
+            import time
+            lines = []
+            for ep in reversed(recent_episodes):
+                ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(ep.get("timestamp", 0.0)))
+                lines.append(f"[{ts}] {ep.get('event_text', '')}")
+            history_str = "\n".join(lines)
+
+            system_instruction = (
+                "You are ARIA, a proactive AI assistant. You notice the user is idle and want to check in "
+                "on a recent task, project, or topic they were working on based on past episodes.\n"
+                "Identify a recent topic (e.g. debugging, building, configuring, learning) and ask a "
+                "natural, friendly question to follow up on it. Keep it under 20 words. Examples:\n"
+                "- 'Did you manage to get that Firebase voice pipeline working?'\n"
+                "- 'Were you able to resolve the issue with the face recognition loop?'\n"
+                "If there is no clear technical task or project, or if the episodes are just greeting/idle talk, "
+                "do NOT make anything up; return exactly the word: 'NONE'."
+            )
+            prompt = f"Recent episodic history:\n{history_str}\n\nAsk a follow-up question about the latest task or return 'NONE'."
+
+            if aria_instance.brain:
+                res = aria_instance.brain.think_raw(prompt, system_instruction=system_instruction)
+                if res and res.strip() and res.strip().upper() != "NONE" and len(res.strip()) > 5:
+                    return res.strip()
+        except Exception as e:
+            print(f"[ProactiveCognition] Error generating idle memory suggestion: {e}")
+        return None
+
     def run_background_check(self, aria_instance) -> Optional[str]:
         """
         High-level method called by _run_background_scheduler on each iteration.
@@ -176,6 +214,21 @@ class ProactiveCognition:
             # Calculate working minutes since ARIA started
             start_time = getattr(aria_instance, "start_time", time.time())
             working_minutes = int((time.time() - start_time) / 60.0)
+
+            # Check if user has been idle/inactive for at least 15 minutes (900s)
+            # AND the user is present in front of the screen
+            last_interaction = getattr(aria_instance, "last_interaction_time", 0.0)
+            time_since_last_interaction = time.time() - last_interaction
+            presence = getattr(aria_instance, "presence_state", "USER_LEFT")
+            
+            # If the user is present/engaged and has been idle for a while (e.g. > 15 minutes)
+            if presence in ["USER_ENGAGED", "USER_PRESENT", "OWNER_ACTIVE"] and time_since_last_interaction > 900.0:
+                if not self.is_on_cooldown(is_emotional=False):
+                    idle_suggestion = self.generate_idle_memory_suggestion(aria_instance, username)
+                    if idle_suggestion:
+                        self.trigger_proactive_speak()
+                        self.last_suggestion_text = idle_suggestion
+                        return idle_suggestion
 
             # Get latest inferred emotion from episodic memory (if available)
             emotion = "neutral"

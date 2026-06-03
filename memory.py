@@ -25,7 +25,7 @@ class FaceMemory:
         except Exception:
             return None
 
-    def detect_faces(self, gray, scale_factor=1.3, min_neighbors=5, min_size=(30, 30)):
+    def detect_faces(self, gray, scale_factor=1.1, min_neighbors=4, min_size=(30, 30)):
         try:
             cascade = self.face_cascade
             if cascade is None or cascade.empty():
@@ -38,8 +38,8 @@ class FaceMemory:
     def add_face(self, name, image_array=None, embedding=None):
         return self.memory_manager.save_face_embedding(name, image_array, embedding)
 
-    def identify_face(self, image_array):
-        return self.memory_manager.identify_user(image_array)
+    def identify_face(self, image_array, is_already_cropped=False):
+        return self.memory_manager.identify_user(image_array, is_already_cropped=is_already_cropped)
 
     def forget(self, name):
         normalized_user = name.strip().strip('.').lower()

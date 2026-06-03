@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "968886942490",
+    "project_id": "aria-3e1da",
+    "storage_bucket": "aria-3e1da.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:968886942490:android:0bef372386c93636a94aa3",
+        "android_client_info": {
+          "package_name": "com.aria.bridge"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCcFToFzpKKZ8-hnznFDMjSohDQVCRrk0o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

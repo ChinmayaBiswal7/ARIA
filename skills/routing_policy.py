@@ -34,6 +34,7 @@ CONVERSATIONAL_PATTERNS = [
     r"\b(i am fine|i'm fine|i feel|are you okay|do you feel|you there)\b",
     r"\b(who are you|what are you|tell me about yourself)\b",
     r"\b(see you|bye|goodbye|talk later|see ya)\b",
+    r"\b(yes,?\s+all\s+good|all\s+good|nothing\s+to\s+worry\s+about|no\s+worries|no\s+problem|yes,?\s+fine|yeah,?\s+fine|no,?\s+all\s+good|not\s+really|don't\s+worry|dont\s+worry)\b",
 ]
 
 EXPLICIT_SEARCH_PREFIXES = [

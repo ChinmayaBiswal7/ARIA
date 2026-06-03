@@ -52,3 +52,15 @@ Desktop.ini
 scratch/
 shap_e_model_cache/
 
+# Camera / Face Rec Temp Files
+failed_face_frames/
+
+# Local Generated Images Cache
+skills/assets/images/
+
+# Android Project build and IDE caches
+health_bridge_android/.gradle/
+health_bridge_android/.idea/
+health_bridge_android/build/
+health_bridge_android/*/build/
+health_bridge_android/local.properties

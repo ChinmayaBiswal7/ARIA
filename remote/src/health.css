@@ -1,0 +1,55 @@
+.health-widget {
+  background: rgba(13, 13, 23, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+.health-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.health-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #a78bfa;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.health-sync {
+  font-size: 0.7rem;
+  color: #64748b;
+}
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.health-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.health-icon {
+  font-size: 1.2rem;
+  margin-bottom: 4px;
+}
+.health-val {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+.health-label {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+}

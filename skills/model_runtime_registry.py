@@ -110,11 +110,12 @@ class ModelRuntimeRegistry:
         if m:
             m.record_failure(is_quota_error)
             
-        # Shared Gemini Key logic: If one Gemini model hits a 429 quota failure,
-        # cooldown all Gemini models since they share the same API key.
-        if m and m.provider == "gemini" and is_quota_error:
+        # Shared provider key/quota logic: If one model of a provider hits a 429 quota failure,
+        # cooldown all models under the same provider since they share the key/quota.
+        if m and m.provider in ["gemini", "groq"] and is_quota_error:
+            provider = m.provider
             for other_name, other_m in self.models.items():
-                if other_m.provider == "gemini" and other_name != name:
+                if other_m.provider == provider and other_name != name:
                     other_m.record_failure(is_quota_error=True)
 
     def get_best_model(self, task_type, has_image=False, internet_available=True):

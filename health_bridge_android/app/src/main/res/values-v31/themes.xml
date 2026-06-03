@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.HealthBridge" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Set the splash screen background to exactly match the React PWA background -->
+        <item name="android:windowSplashScreenBackground">#050505</item>
+        
+        <!-- Hide the default app icon in the splash screen -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/transparent_icon</item>
+        
+        <item name="colorPrimary">@color/purple_500</item>
+        <item name="colorSecondary">@color/teal_200</item>
+        <item name="android:statusBarColor">#050505</item>
+        <item name="android:navigationBarColor">#050505</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#050505</item>
+    </style>
+</resources>

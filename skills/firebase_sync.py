@@ -6,6 +6,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
+from skills.health_skill import HealthSkill
 CONFIG_PATH = "firebase_config.json"
 SERVICE_ACCOUNT_PATH = "serviceAccountKey.json"
 
@@ -84,6 +85,8 @@ class FirebaseSync:
         self.current_command_id = None
         self.last_message     = "ARIA online. Ready."
         self.first_read_done  = False
+        self.screenshot_quality = "medium"
+        self.health_skill     = HealthSkill()
         self._load_config()
 
     # ── Config ────────────────────────────────────────────────────────────────
@@ -189,12 +192,13 @@ class FirebaseSync:
         if self.firestore_client:
             try:
                 data = {
-                    "status":        status_str,
-                    "last_response": message,
-                    "timestamp":     time.time(),
-                    "reply_target":  "phone" if command_id else "laptop",
-                    "screen_w":      sw,
-                    "screen_h":      sh,
+                    "status":             status_str,
+                    "last_response":      message,
+                    "timestamp":          time.time(),
+                    "reply_target":       "phone" if command_id else "laptop",
+                    "screen_w":           sw,
+                    "screen_h":           sh,
+                    "screenshot_quality": self.screenshot_quality,
                 }
                 if command_id:
                     data["command_id"] = command_id
@@ -207,12 +211,13 @@ class FirebaseSync:
         url = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
                f"/databases/(default)/documents/status/latest")
         payload = {"fields": {
-            "status":        {"stringValue": status_str},
-            "last_response": {"stringValue": message},
-            "timestamp":     {"doubleValue": time.time()},
-            "reply_target":  {"stringValue": "phone" if command_id else "laptop"},
-            "screen_w":      {"integerValue": sw},
-            "screen_h":      {"integerValue": sh},
+            "status":             {"stringValue": status_str},
+            "last_response":      {"stringValue": message},
+            "timestamp":          {"doubleValue": time.time()},
+            "reply_target":       {"stringValue": "phone" if command_id else "laptop"},
+            "screen_w":           {"integerValue": sw},
+            "screen_h":           {"integerValue": sh},
+            "screenshot_quality": {"stringValue": self.screenshot_quality},
         }}
         if command_id:
             payload["fields"]["command_id"] = {"stringValue": command_id}
@@ -295,6 +300,30 @@ class FirebaseSync:
                         threading.Thread(target=self._execute_remote_command,
                                          args=(cmd_text, image_b64, cmd_id), daemon=True).start()
 
+                # Also poll health/latest
+                url_health = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
+                       f"/databases/(default)/documents/health/latest")
+                try:
+                    req_health = urllib.request.Request(url_health, headers=headers, method="GET")
+                    with urllib.request.urlopen(req_health, timeout=10) as resp_health:
+                        h_data = json.loads(resp_health.read().decode())
+                        if h_data and "fields" in h_data:
+                            hf = h_data["fields"]
+                            steps = int(hf.get("steps", {}).get("integerValue", 0))
+                            cals = float(hf.get("calories", {}).get("doubleValue", 0.0) or hf.get("calories", {}).get("integerValue", 0))
+                            slp = float(hf.get("sleepHours", {}).get("doubleValue", 0.0) or hf.get("sleepHours", {}).get("integerValue", 0))
+                            sq = hf.get("sleepQuality", {}).get("stringValue", "Unknown")
+                            hr = int(hf.get("heartRate", {}).get("integerValue", 0))
+                            spo2 = float(hf.get("spo2", {}).get("doubleValue", 0.0) or hf.get("spo2", {}).get("integerValue", 0))
+                            ts = float(hf.get("timestamp", {}).get("doubleValue", time.time()) or hf.get("timestamp", {}).get("integerValue", time.time()))
+                            
+                            self.health_skill.save_fitness_metrics(
+                                steps=steps, calories=cals, sleep_hours=slp,
+                                sleep_quality=sq, heart_rate=hr, spo2=spo2, timestamp=ts
+                            )
+                except Exception as e:
+                    pass
+
             except urllib.error.HTTPError as e:
                 consecutive_errors += 1
                 body = e.read().decode(errors="ignore") if e.fp else ""
@@ -319,6 +348,17 @@ class FirebaseSync:
     def _execute_remote_command(self, cmd_text, image_b64=None, cmd_id=None):
         try:
             print(f"[FirebaseSync] Executing remote command: '{cmd_text}'")
+            
+            # Intercept screenshot quality config commands from phone
+            if cmd_text.lower().startswith("screenshot quality "):
+                q = cmd_text.lower().replace("screenshot quality ", "").strip()
+                if q in ["low", "medium", "high"]:
+                    self.screenshot_quality = q
+                    print(f"[FirebaseSync] Screenshot quality set to {q}")
+                    self.update_status(f"Screenshot quality set to {q}", status_str="idle")
+                    self.capture_and_upload_screenshot()
+                    return
+
             self.current_command_id = cmd_id
             self.status_updated_during_cmd = False
             self.update_status(f"Executing: {cmd_text}", status_str="thinking")
@@ -361,11 +401,22 @@ class FirebaseSync:
 
             # Take screenshot
             img = pyautogui.screenshot()
-            # Resize to 960x540 for faster transmission
-            img = img.resize((960, 540))
-            # Save to JPEG bytes
+            
+            # Set target width, height, and JPEG compression quality based on preference
+            if self.screenshot_quality == "low":
+                w, h = 800, 450
+                quality = 50
+            elif self.screenshot_quality == "high":
+                w, h = 1440, 810
+                quality = 80
+            else:  # medium
+                w, h = 1120, 630
+                quality = 65
+
+            # Resize and save
+            img = img.resize((w, h))
             buf = io.BytesIO()
-            img.save(buf, format='JPEG', quality=60)
+            img.save(buf, format='JPEG', quality=quality)
             b64 = base64.b64encode(buf.getvalue()).decode()
             
             # Write to Firestore
@@ -400,6 +451,16 @@ class FirebaseSync:
                     break
                 time.sleep(0.1)
             if self.running:
+                # Slow down poll rate if voice session is active (yield CPU/network)
+                main_mod = __import__('__main__')
+                aria = getattr(main_mod, 'instance', None) or getattr(main_mod, 'aria_instance', None)
+                if aria and aria.voice and (aria.voice.is_speaking or getattr(aria.voice, 'vad_detecting_speech', False)):
+                    if not getattr(self, "_paused_ss_log", False):
+                        print("[FirebaseSync] Voice session active. Yielding screenshot loop (sleeping 3.0s)...")
+                        self._paused_ss_log = True
+                    time.sleep(3.0)
+                    continue
+                self._paused_ss_log = False
                 self.capture_and_upload_screenshot()
 
     # ── Heartbeat Loop ────────────────────────────────────────────────────────
@@ -467,8 +528,24 @@ class FirebaseSync:
             try:
                 doc_ref = self.firestore_client.collection("commands").document("latest")
                 self.listener = doc_ref.on_snapshot(self._on_sdk_snapshot)
+                
+                health_ref = self.firestore_client.collection("health").document("latest")
+                self.health_listener = health_ref.on_snapshot(self._on_health_snapshot)
+                
                 self.update_status("ARIA online. Ready.", status_str="idle")
                 print("[FirebaseSync] Real-time SDK listener started. OK")
+
+                # Also start voice audio listener for phone push-to-talk
+                try:
+                    from skills.api_integrations import APIIntegrations
+                    integrations = APIIntegrations()
+                    self._voice_listener = VoiceAudioListener(
+                        self.firestore_client, self.callback, integrations
+                    )
+                    self._voice_listener.start()
+                except Exception as ve:
+                    print(f"[FirebaseSync] VoiceAudioListener init failed: {ve}")
+
                 return
             except Exception as e:
                 print(f"[FirebaseSync] SDK listener failed: {e}. Falling back to REST polling.")
@@ -479,8 +556,219 @@ class FirebaseSync:
 
     def stop(self):
         self.running = False
+        if hasattr(self, '_voice_listener') and self._voice_listener:
+            try:
+                self._voice_listener.stop()
+            except Exception:
+                pass
         if self.listener:
             try:
                 self.listener.unsubscribe()
             except Exception:
                 pass
+        if hasattr(self, 'health_listener') and self.health_listener:
+            try:
+                self.health_listener.unsubscribe()
+            except Exception:
+                pass
+
+    def _on_health_snapshot(self, doc_snapshot, changes, read_time):
+        for doc in doc_snapshot:
+            if not doc.exists:
+                continue
+            data = doc.to_dict()
+            steps = data.get("steps", 0)
+            calories = float(data.get("calories", 0.0))
+            sleep_hours = float(data.get("sleepHours", 0.0))
+            sleep_quality = data.get("sleepQuality", "Unknown")
+            heart_rate = data.get("heartRate", 0)
+            spo2 = float(data.get("spo2", 0.0))
+            timestamp = data.get("timestamp", time.time())
+            
+            # Print without spamming
+            self.health_skill.save_fitness_metrics(
+                steps=steps,
+                calories=calories,
+                sleep_hours=sleep_hours,
+                sleep_quality=sleep_quality,
+                heart_rate=heart_rate,
+                spo2=spo2,
+                timestamp=timestamp
+            )
+
+    def upload_pending_images(self, image_gen):
+        if not self.firestore_client:
+            print("[FirebaseSync] SDK not initialized. Skipping image upload.")
+            return
+
+        pending = image_gen.get_pending_uploads()
+        if not pending:
+            return
+
+        print(f"[FirebaseSync] Uploading {len(pending)} image(s) to Firebase Storage...")
+        try:
+            from firebase_admin import storage
+            bucket = storage.bucket(f"{self.project_id}.firebasestorage.app")
+            
+            for local_path in pending:
+                try:
+                    filename = os.path.basename(local_path)
+                    blob = bucket.blob(f"aria-images/{filename}")
+                    blob.upload_from_filename(local_path)
+                    print(f"[FirebaseSync] Uploaded: {filename}")
+                    image_gen.mark_uploaded(local_path)
+                except Exception as e:
+                    print(f"[FirebaseSync] Upload failed for {local_path}: {e}")
+        except Exception as e:
+            print(f"[FirebaseSync] Firebase Storage access failed: {e}")
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# VoiceAudioListener — Phone push-to-talk → Firebase Storage → Groq Whisper
+# ───────────────────────────────────────────────────────────────────────────────
+class VoiceAudioListener:
+    """
+    Watches the Firestore 'voice_audio' collection for new documents.
+    When a new unprocessed entry appears (uploaded by phone push-to-talk),
+    downloads the audio from Firebase Storage, runs Groq Whisper STT,
+    and fires the command callback with the transcript.
+
+    Architecture:
+        Phone mic → MediaRecorder → Firebase Storage upload
+                                   → Firestore {url, processed:false}
+                                              ↓  (on_snapshot)
+        VoiceAudioListener → download → temp .webm → Groq Whisper → callback()
+    """
+
+    def __init__(self, firestore_client, command_callback, integrations):
+        self.db            = firestore_client
+        self.callback      = command_callback
+        self.integrations  = integrations
+        self.listener      = None
+        self._seen_ids     = set()   # dedup guard
+        self._start_time   = time.time()
+        print("[VoiceAudio] VoiceAudioListener initialized.")
+
+    def start(self):
+        col_ref = self.db.collection("voice_audio")
+        self.listener = col_ref.on_snapshot(self._on_snapshot)
+        print("[VoiceAudio] Listening for push-to-talk voice clips...")
+
+    def stop(self):
+        if self.listener:
+            try:
+                self.listener.unsubscribe()
+            except Exception:
+                pass
+        print("[VoiceAudio] Listener stopped.")
+
+    def _on_snapshot(self, col_snapshot, changes, read_time):
+        for change in changes:
+            if change.type.name not in ("ADDED", "MODIFIED"):
+                continue
+            doc = change.document
+            data = doc.to_dict()
+            if not data:
+                continue
+
+            # Skip already-processed or docs from before we started
+            if data.get("processed", False):
+                continue
+            doc_ts = data.get("timestamp_ms", 0) / 1000.0
+            if doc_ts < self._start_time - 5:
+                # Mark old pre-existing docs so we don't re-process on restart
+                if doc.id not in self._seen_ids:
+                    self._seen_ids.add(doc.id)
+                continue
+            if doc.id in self._seen_ids:
+                continue
+            self._seen_ids.add(doc.id)
+
+            url  = data.get("url", "")
+            audio_base64 = data.get("audio_base64", "")
+            if not url and not audio_base64:
+                continue
+
+            # Process in background so listener isn't blocked
+            threading.Thread(
+                target=self._handle_voice_clip,
+                args=(doc.id, url, audio_base64),
+                daemon=True
+            ).start()
+
+    def _set_transcribing(self, doc_id):
+        try:
+            self.db.collection("voice_audio").document(doc_id).update({
+                "transcribing": True
+            })
+        except Exception as e:
+            print(f"[VoiceAudio] Could not mark transcribing: {e}")
+
+    def _handle_voice_clip(self, doc_id, audio_url, audio_base64=None):
+        import tempfile
+        tmp_path = None
+        transcript = ""
+        try:
+            print(f"[Laptop] voice_audio doc received: {doc_id}")
+            self._set_transcribing(doc_id)
+
+            # Save audio content to a temp WebM file
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+                tmp_path = tmp.name
+                if audio_base64:
+                    print(f"[Laptop] Decoding audio from Base64...")
+                    import base64
+                    audio_data = base64.b64decode(audio_base64)
+                    tmp.write(audio_data)
+                    print(f"[Laptop] Decoded audio: {len(audio_data)} bytes")
+                elif audio_url:
+                    print(f"[VoiceAudio] Downloading from storage URL: {audio_url}...")
+                    import urllib.request as ureq
+                    with ureq.urlopen(audio_url, timeout=15) as resp:
+                        tmp.write(resp.read())
+                else:
+                    raise ValueError("No audio data or URL provided")
+
+            print(f"[VoiceAudio] Saved to {tmp_path}, transcribing with Groq Whisper...")
+
+            # Transcribe via Groq Whisper
+            transcript = self.integrations.transcribe_audio_groq(tmp_path)
+
+            if not transcript or not transcript.strip():
+                print("[VoiceAudio] Empty transcript — ignoring.")
+                transcript = ""
+                return
+
+            transcript = transcript.strip()
+            print(f"[Laptop] Whisper result: \"{transcript}\"")
+
+            # Fire command callback (same as text command from phone)
+            threading.Thread(
+                target=self.callback,
+                args=(transcript,),
+                kwargs={"remote": True},
+                daemon=True
+            ).start()
+
+        except Exception as e:
+            print(f"[VoiceAudio] Error processing clip: {e}")
+        finally:
+            # Clean up temp file
+            if tmp_path:
+                try:
+                    import os as _os
+                    _os.unlink(tmp_path)
+                except Exception:
+                    pass
+            # Always mark processed to prevent re-processing, storing the transcript
+            self._mark_processed(doc_id, transcript)
+
+    def _mark_processed(self, doc_id, transcript=""):
+        try:
+            self.db.collection("voice_audio").document(doc_id).update({
+                "processed": True,
+                "transcript": transcript,
+                "processed_at": time.time()
+            })
+        except Exception as e:
+            print(f"[VoiceAudio] Could not mark processed: {e}")

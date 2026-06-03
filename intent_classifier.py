@@ -152,6 +152,16 @@ class IntentClassifier:
                 print(f"[IntentClassifier/Guard] '{user_input[:50]}' -> chat (confidence: 0.95, conversational guard)")
                 return "chat", 0.95
 
+        # Step 1.5: conversational repair guard
+        if not skip_repair:
+            for pattern in self.compiled_patterns["repair"]:
+                match = pattern.search(query)
+                if match:
+                    matched_text = match.group(0)
+                    confidence = 0.98 if len(matched_text.split()) > 1 or matched_text in ["actually", "meant"] else 0.85
+                    print(f"[IntentClassifier/Guard] '{user_input[:50]}' -> repair (confidence: {confidence:.2f}, repair guard)")
+                    return "repair", confidence
+
         # Step 2: explicit site action request guard
         if is_site_action_request(user_input):
             print(f"[IntentClassifier/Guard] '{user_input[:50]}' -> search (confidence: 0.92, explicit site action)")

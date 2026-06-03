@@ -226,20 +226,14 @@ class AR3DMode:
 
         # Pinch: distance between index tip (8) and thumb tip (4)
         pinch_dist = math.hypot(lms[8].x - lms[4].x, lms[8].y - lms[4].y)
-        pinching = pinch_dist < 0.07
-
-        # Extended fingers: tip.y < pip.y
-        tips = [8, 12, 16, 20]
-        pips = [6, 10, 14, 18]
-        extended_fingers = [lms[t].y < lms[p].y for t, p in zip(tips, pips)]
-        extended_count = sum(extended_fingers)
+        pinching = pinch_dist < 0.08  # Increased pinch threshold for easier MOVE activation
 
         raw_gesture = "None"
         if pinching:
             raw_gesture = "MOVE"
-        elif extended_count == 1 and extended_fingers[0]:
+        elif lms[8].y < lms[6].y:  # Simplified ROTATE check: index finger is extended (y decreases upwards)
             raw_gesture = "ROTATE"
-        elif extended_count == 0:
+        else:
             raw_gesture = "RELEASE"
 
         # Hand size: distance from wrist (0) to middle MCP (9)
@@ -253,9 +247,9 @@ class AR3DMode:
                 _gesture.candidate_gesture = raw_gesture
                 _gesture.candidate_gesture_start_time = now
             
-            # Check 0.3-second hold
+            # Check 0.1-second hold for extremely snappy controls
             target_gesture = _gesture.active_gesture
-            if now - _gesture.candidate_gesture_start_time >= 0.3:
+            if now - _gesture.candidate_gesture_start_time >= 0.1:
                 target_gesture = _gesture.candidate_gesture
 
             # Transition logging
@@ -265,8 +259,6 @@ class AR3DMode:
                     print("MODEL MOVED")
                 elif target_gesture == "ROTATE":
                     print("ROTATE DETECTED")
-                elif pinching:
-                    print("PINCH DETECTED")
 
             _gesture.hand_visible   = True
             _gesture.active_gesture = target_gesture
@@ -521,11 +513,13 @@ class AR3DMode:
                     if prev_hand_pos is not None:
                         dx = hand_pos[0] - prev_hand_pos[0]
                         dy = -(hand_pos[1] - prev_hand_pos[1])
-                        # Deadzone < 0.01
-                        if abs(dx) > 0.01 or abs(dy) > 0.01:
-                            assembly[0].shift([dx * 5.0, dy * 5.0, 0])
+                        # Deadzone 0.002 to filter noise but preserve slow movements
+                        if abs(dx) > 0.002 or abs(dy) > 0.002:
+                            assembly[0].shift([dx * 12.0, dy * 12.0, 0])
                             needs_render[0] = True
-                    prev_hand_pos = hand_pos
+                            prev_hand_pos = hand_pos
+                    else:
+                        prev_hand_pos = hand_pos
                     current_gesture_name = "MOVE"
                     
                     # Reset other states
@@ -538,10 +532,10 @@ class AR3DMode:
                     if prev_index_pos is not None:
                         dx = index_t[0] - prev_index_pos[0]
                         dy = -(index_t[1] - prev_index_pos[1])
-                        # Deadzone < 0.01
-                        if abs(dx) > 0.01 or abs(dy) > 0.01:
-                            rot_y = dx * 180
-                            rot_x = -dy * 180
+                        # Deadzone 0.002 to filter noise but preserve slow movements
+                        if abs(dx) > 0.002 or abs(dy) > 0.002:
+                            rot_y = dx * 360  # Increased sensitivity
+                            rot_x = -dy * 360
                             
                             # Smooth over 3 frames
                             rot_history_y.append(rot_y)
@@ -556,7 +550,9 @@ class AR3DMode:
                             assembly[0].rotate_y(avg_rot_y)
                             assembly[0].rotate_x(avg_rot_x)
                             needs_render[0] = True
-                    prev_index_pos = index_t
+                            prev_index_pos = index_t
+                    else:
+                        prev_index_pos = index_t
                     current_gesture_name = "ROTATE"
                     
                     # Reset other states
@@ -578,16 +574,23 @@ class AR3DMode:
                 rot_history_x.clear()
                 current_gesture_name = "No Hand"
 
-            # Gesture status text overlay handling (shows for 2 seconds on change)
-            if current_gesture_name != last_shown_gesture:
-                if current_gesture_name in ["MOVE", "ROTATE"]:
-                    gesture_display_expiry = time.time() + 2.0
-                last_shown_gesture = current_gesture_name
-
-            if time.time() < gesture_display_expiry and last_shown_gesture in ["MOVE", "ROTATE"]:
-                gesture_overlay.text(f"Gesture: {last_shown_gesture}")
+            # Dynamic on-screen gesture indicator overlay
+            if hand_vis:
+                if active_g == "MOVE":
+                    gesture_overlay.text("Gesture: 👌 MOVE (Pinching)")
+                    gesture_overlay.c("green")
+                elif active_g == "ROTATE":
+                    gesture_overlay.text("Gesture: ☝️ ROTATE (Index Up)")
+                    gesture_overlay.c("cyan")
+                elif active_g == "RELEASE":
+                    gesture_overlay.text("Gesture: ✋ RELEASE (Open)")
+                    gesture_overlay.c("white")
+                else:
+                    gesture_overlay.text("Gesture: None")
+                    gesture_overlay.c("gray")
             else:
-                gesture_overlay.text("")
+                gesture_overlay.text("Gesture: ❌ No Hand Detected")
+                gesture_overlay.c("red")
 
             # Show controls guide overlay (for 10 seconds)
             show_controls_now = time.time() < controls_display_expiry

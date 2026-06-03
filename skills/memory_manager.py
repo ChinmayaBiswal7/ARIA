@@ -80,6 +80,7 @@ class MemoryManager:
         self.known_faces = {}  # username -> embedding vector
         self.last_face_log_time = 0.0
         self.last_face_match_user = None
+        self.last_face_update_time = 0.0
         
         self.firestore = None
         self._init_sqlite()
@@ -301,24 +302,33 @@ class MemoryManager:
                     data = doc.to_dict()
                     emb = data.get("embedding")
                     if emb:
-                        loaded[doc.id] = emb
+                        normalized_id = doc.id.strip().strip('.').lower()
+                        # Auto-migrate single embedding (1D) to cluster list format
+                        if isinstance(emb, list) and len(emb) > 0:
+                            if isinstance(emb[0], (int, float)):
+                                cluster = [{"embedding": emb, "added_at": time.time()}]
+                            else:
+                                cluster = emb
+                        else:
+                            cluster = emb
+                        loaded[normalized_id] = cluster
                 
                 # Update SQLite local cache with Firebase data
                 if loaded:
                     conn = sqlite3.connect(self.db_path)
                     cursor = conn.cursor()
-                    for user, emb in loaded.items():
+                    for user, cluster in loaded.items():
                         cursor.execute("""
                             INSERT OR REPLACE INTO face_embeddings (username, embedding_json, updated_at)
                             VALUES (?, ?, ?)
-                        """, (user, json.dumps(emb), time.time()))
+                        """, (user, json.dumps(cluster), time.time()))
                     conn.commit()
                     conn.close()
                     self.known_faces = loaded
                     print(f"[MemoryManager] Loaded {len(loaded)} faces from Firebase.")
             except Exception as e:
                 print(f"[MemoryManager] Firebase face load failed: {e}. Trying SQLite cache...")
-
+ 
         # 2. SQLite Fallback
         if not self.known_faces:
             try:
@@ -329,7 +339,16 @@ class MemoryManager:
                 conn.close()
                 
                 for user, emb_json in rows:
-                    loaded[user] = json.loads(emb_json)
+                    normalized_user = user.strip().strip('.').lower()
+                    emb_parsed = json.loads(emb_json)
+                    if isinstance(emb_parsed, list) and len(emb_parsed) > 0:
+                        if isinstance(emb_parsed[0], (int, float)):
+                            cluster = [{"embedding": emb_parsed, "added_at": time.time()}]
+                        else:
+                            cluster = emb_parsed
+                    else:
+                        cluster = emb_parsed
+                    loaded[normalized_user] = cluster
                 self.known_faces = loaded
                 print(f"[MemoryManager] Loaded {len(loaded)} faces from SQLite cache.")
             except Exception as e:
@@ -338,18 +357,20 @@ class MemoryManager:
         # 3. Sync to ChromaDB face collection
         if self.known_faces and self.vector_mem and self.vector_mem.faces_collection:
             try:
-                for user, emb in self.known_faces.items():
-                    self.vector_mem.faces_collection.upsert(
-                        embeddings=[emb],
-                        metadatas=[{"username": user}],
-                        ids=[user]
-                    )
-                print(f"[MemoryManager] Synced {len(self.known_faces)} face embeddings to ChromaDB.")
+                for user, cluster in self.known_faces.items():
+                    for i, entry in enumerate(cluster):
+                        v = entry["embedding"]
+                        self.vector_mem.faces_collection.upsert(
+                            embeddings=[v],
+                            metadatas=[{"username": user}],
+                            ids=[f"{user}_{i}"]
+                        )
+                print(f"[MemoryManager] Synced cluster face embeddings to ChromaDB.")
             except Exception as e:
                 print(f"[MemoryManager] Failed to sync face embeddings to ChromaDB: {e}")
 
     def save_face_embedding(self, username, image_array=None, embedding=None):
-        """Extract or accept face embedding, save to Firebase, SQLite, and ChromaDB, and update memory cache."""
+        """Extract or accept face embedding / cluster, save to Firebase, SQLite, and ChromaDB, and update memory cache."""
         emb = embedding if embedding is not None else (self.embedder.get_embedding(image_array) if self.embedder and image_array is not None else None)
         if not emb:
             print("[MemoryManager] Could not extract or receive face embedding.")
@@ -358,6 +379,36 @@ class MemoryManager:
         normalized_user = username.strip().strip('.').lower()
         now = time.time()
 
+        # If it's a single 1D embedding, build or update the cluster
+        if isinstance(emb, list) and len(emb) > 0 and isinstance(emb[0], (int, float)):
+            existing_cluster = self.known_faces.get(normalized_user) or []
+            # Check duplicate check distance < 0.08 (similarity >= 0.92 to any existing member)
+            is_redundant = False
+            for entry in existing_cluster:
+                saved = entry["embedding"]
+                if self.embedder:
+                    sim = self.embedder.cosine_similarity(emb, saved)
+                    if sim >= 0.92:
+                        is_redundant = True
+                        break
+            if is_redundant and len(existing_cluster) > 0:
+                print(f"[FaceLearning] Skip duplicate storage for '{normalized_user}' (already exists in cluster)")
+                return True
+            
+            cluster = list(existing_cluster)
+            if len(cluster) >= 8:
+                cluster.sort(key=lambda x: x["added_at"])
+                removed = cluster.pop(0)
+                print(f"[FaceLearning] Cluster full for '{normalized_user}'. Replaced oldest embedding added at {removed['added_at']}")
+            cluster.append({
+                "embedding": emb,
+                "added_at": now
+            })
+            emb_to_save = cluster
+        else:
+            # It's already a cluster
+            emb_to_save = emb
+
         # 1. Save to SQLite
         try:
             conn = sqlite3.connect(self.db_path)
@@ -365,7 +416,7 @@ class MemoryManager:
             cursor.execute("""
                 INSERT OR REPLACE INTO face_embeddings (username, embedding_json, updated_at)
                 VALUES (?, ?, ?)
-            """, (normalized_user, json.dumps(emb), now))
+            """, (normalized_user, json.dumps(emb_to_save), now))
             conn.commit()
             conn.close()
         except Exception as e:
@@ -375,7 +426,7 @@ class MemoryManager:
         if self.firestore:
             try:
                 self.firestore.collection("faces").document(normalized_user).set({
-                    "embedding": emb,
+                    "embedding": emb_to_save,
                     "updated_at": now
                 })
                 print(f"[MemoryManager] Successfully synced face for '{normalized_user}' to Firebase.")
@@ -385,26 +436,87 @@ class MemoryManager:
         # 3. Save to ChromaDB face collection
         if self.vector_mem and self.vector_mem.faces_collection:
             try:
-                self.vector_mem.faces_collection.upsert(
-                    embeddings=[emb],
-                    metadatas=[{"username": normalized_user}],
-                    ids=[normalized_user]
-                )
-                print(f"[MemoryManager] Saved face embedding for '{normalized_user}' to ChromaDB.")
+                # Upsert each cluster member with a unique ID
+                for i, entry in enumerate(emb_to_save):
+                    v = entry["embedding"]
+                    self.vector_mem.faces_collection.upsert(
+                        embeddings=[v],
+                        metadatas=[{"username": normalized_user}],
+                        ids=[f"{normalized_user}_{i}"]
+                    )
+                print(f"[MemoryManager] Saved face cluster for '{normalized_user}' to ChromaDB.")
             except Exception as e:
                 print(f"[MemoryManager] ChromaDB face save failed: {e}")
 
         # Update cache
-        self.known_faces[normalized_user] = emb
+        self.known_faces[normalized_user] = emb_to_save
         return True
 
-
-    def identify_user(self, image_array=None, threshold=0.63, return_confidence=False, embedding=None):
+    def add_face_embedding_to_cluster(self, username, current_emb, similarity):
+        """Adds a new face embedding vector to the user's cluster (up to 8 items) if it captures a new condition (sufficiently different)."""
+        normalized_user = username.strip().strip('.').lower()
+ 
+        # Cooldown guard: 30 seconds
+        now = time.time()
+        if now - getattr(self, "last_face_update_time", 0.0) < 30.0:
+            return False
+ 
+        # Threshold check: Access / Learning threshold (>= 0.65)
+        if similarity < 0.65:
+            print(f"[FaceLearning] User={normalized_user} Similarity={similarity:.3f} Skipped (below 0.65 threshold)")
+            return False
+ 
+        # Retrieve the user's current cluster
+        existing_cluster = self.known_faces.get(normalized_user) or []
+        
+        # Check duplicate check distance < 0.08 (similarity >= 0.92 to any existing member)
+        is_redundant = False
+        for entry in existing_cluster:
+            saved = entry["embedding"]
+            if self.embedder:
+                sim = self.embedder.cosine_similarity(current_emb, saved)
+                if sim >= 0.92:
+                    is_redundant = True
+                    break
+        
+        if is_redundant and len(existing_cluster) > 0:
+            print(f"[FaceLearning] User={normalized_user} Similarity={similarity:.3f} Skipped (redundant, already represented in cluster)")
+            return False
+ 
+        # L2-normalize the incoming embedding vector before saving
+        try:
+            import numpy as np
+            cur_np = np.array(current_emb)
+            norm = np.linalg.norm(cur_np)
+            if norm > 0:
+                cur_np = cur_np / norm
+            current_emb = cur_np.tolist()
+        except Exception as e:
+            print(f"[MemoryManager] Embedding normalization failed: {e}")
+ 
+        # Update cluster list
+        cluster = list(existing_cluster)
+        if len(cluster) >= 8:
+            cluster.sort(key=lambda x: x["added_at"])
+            removed = cluster.pop(0)
+            print(f"[FaceLearning] Cluster full for '{normalized_user}'. Replaced oldest embedding added at {removed['added_at']}")
+ 
+        cluster.append({
+            "embedding": current_emb,
+            "added_at": now
+        })
+        
+        print(f"[FaceLearning] User={normalized_user} Similarity={similarity:.3f} Cluster size={len(cluster)}/8. Added new embedding condition.")
+        self.last_face_update_time = now
+        return self.save_face_embedding(normalized_user, embedding=cluster)
+ 
+ 
+    def identify_user(self, image_array=None, threshold=0.63, return_confidence=False, embedding=None, is_already_cropped=False):
         """Identify user based on face embedding cosine similarity using ChromaDB or fallback."""
-        current_emb = embedding if embedding is not None else (self.embedder.get_embedding(image_array) if self.embedder and image_array is not None else None)
+        current_emb = embedding if embedding is not None else (self.embedder.get_embedding(image_array, is_already_cropped=is_already_cropped) if self.embedder and image_array is not None else None)
         if not current_emb:
             return ("Unknown", 0.0) if return_confidence else "Unknown"
-
+ 
         # 1. Try ChromaDB query first
         if self.vector_mem and self.vector_mem.faces_collection:
             try:
@@ -413,47 +525,77 @@ class MemoryManager:
                     n_results=1
                 )
                 if results and 'ids' in results and results['ids'] and results['ids'][0]:
-                    best_match = results['ids'][0][0]
+                    best_match_id = results['ids'][0][0]
                     dist = results['distances'][0][0]
                     sim = 1.0 - dist
                     
-                    now = time.time()
-                    if best_match != self.last_face_match_user or (now - self.last_face_log_time) >= 5.0:
-                        print(f"[MemoryManager] ChromaDB face match: '{best_match}' with similarity: {sim:.3f}")
-                        self.last_face_match_user = best_match
-                        self.last_face_log_time = now
-
+                    # Extract username from metadata if available
+                    best_match_meta = results['metadatas'][0][0] if ('metadatas' in results and results['metadatas'] and results['metadatas'][0]) else None
+                    best_match = best_match_meta.get("username", best_match_id) if best_match_meta else best_match_id
+                    
+                    # Clean/normalize
                     best_match_normalized = best_match.strip().strip('.').lower()
+                    
+                    # Remove trailing underscore suffixes e.g. chinmay_0 -> chinmay
+                    if "_" in best_match_normalized:
+                        parts = best_match_normalized.rsplit("_", 1)
+                        if parts[1].isdigit():
+                            best_match_normalized = parts[0]
+                    
+                    now = time.time()
+                    if best_match_normalized != self.last_face_match_user or (now - self.last_face_log_time) >= 5.0:
+                        print(f"[MemoryManager] ChromaDB face match: '{best_match_normalized}' with similarity: {sim:.3f}")
+                        self.last_face_match_user = best_match_normalized
+                        self.last_face_log_time = now
+ 
                     if sim >= threshold:
+                        print(f"[FaceRec] Match={best_match_normalized} Similarity={sim:.3f}")
                         return (best_match_normalized, sim) if return_confidence else best_match_normalized
+                    else:
+                        print(f"[FaceRec] No match Similarity={sim:.3f}")
+                else:
+                    print("[FaceRec] No match Similarity=0.000")
                 return ("Unknown", 0.0) if return_confidence else "Unknown"
             except Exception as e:
                 print(f"[MemoryManager] ChromaDB face query error: {e}. Falling back to manual search...")
-
+ 
         # 2. Manual SQLite/cache fallback
         if not self.known_faces:
+            print("[FaceRec] No match Similarity=0.000")
             return ("Unknown", 0.0) if return_confidence else "Unknown"
-
+ 
         best_match = "Unknown"
         best_sim = 0.0
-
-        for user, saved_emb in self.known_faces.items():
+ 
+        for user, cluster in self.known_faces.items():
             if not self.embedder:
                 continue
-            sim = self.embedder.cosine_similarity(current_emb, saved_emb)
-            if sim > best_sim:
-                best_sim = sim
-                best_match = user
-
+            # Support both cluster lists and legacy single 1D vectors
+            if isinstance(cluster, list) and len(cluster) > 0 and isinstance(cluster[0], (int, float)):
+                sim = self.embedder.cosine_similarity(current_emb, cluster)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_match = user
+            else:
+                for entry in cluster:
+                    saved_emb = entry["embedding"]
+                    sim = self.embedder.cosine_similarity(current_emb, saved_emb)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_match = user
+ 
         now = time.time()
-        if best_match != self.last_face_match_user or (now - self.last_face_log_time) >= 5.0:
-            print(f"[MemoryManager] Best face match (fallback): '{best_match}' with similarity: {best_sim:.3f}")
-            self.last_face_match_user = best_match
-            self.last_face_log_time = now
-
         best_match_normalized = best_match.strip().strip('.').lower()
+        if best_match_normalized != self.last_face_match_user or (now - self.last_face_log_time) >= 5.0:
+            print(f"[MemoryManager] Best face match (fallback): '{best_match_normalized}' with similarity: {best_sim:.3f}")
+            self.last_face_match_user = best_match_normalized
+            self.last_face_log_time = now
+ 
         if best_sim >= threshold:
+            print(f"[FaceRec] Match={best_match_normalized} Similarity={best_sim:.3f}")
             return (best_match_normalized, best_sim) if return_confidence else best_match_normalized
+        
+        print(f"[FaceRec] No match Similarity={best_sim:.3f}")
         return ("Unknown", 0.0) if return_confidence else "Unknown"
 
     # --- Preferences & Habits Sync ---

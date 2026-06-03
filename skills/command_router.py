@@ -252,3 +252,350 @@ def handle_memory(aria, inp, user_input, image=None):
         return {"handled": True, "action": "memory", "response": res}
 
     return {"handled": False}
+
+
+def handle_chief_of_staff(aria, inp, user_input, image=None):
+    """
+    Handles Chief of Staff voice commands:
+    - Daily briefing / morning briefing / what's my status
+    - Project priority / what should I work on
+    - Mark task done / complete task
+    - Add blocker / remove blocker
+    - Update project focus
+    - Log milestone
+    """
+
+    # ─ Personal OS Life Briefing ─
+    LIFE_OS_TRIGGERS = [
+        "life briefing", "personal system status", "personal status", "system balance"
+    ]
+    if any(t in inp for t in LIFE_OS_TRIGGERS):
+        try:
+            from skills.personal_os_reasoning import PersonalOSReasoningEngine
+            pos = PersonalOSReasoningEngine()
+            pressures = pos.compute_systemic_pressures()
+            
+            speech = f"Personal OS metrics compiled, Chinmay. Your biological energy rating is sitting at {pressures['raw_energy_score']} percent, "
+            speech += f"with an overall life load score of {pressures['overall_life_load']} out of one point zero. "
+            
+            if "ACADEMIC_GUARD" in pressures["active_guards"]:
+                speech += "Academic Guard is currently deployed. Project priorities are lowered to protect upcoming examination targets. "
+            if "BURNOUT_PROTECTION" in pressures["active_guards"]:
+                speech += "Burnout Protection is active, meaning I will prioritize short quick wins to avoid focus fatigue tonight. "
+            if not pressures["active_guards"]:
+                speech += "All strategic vectors look incredibly clean and balanced tonight."
+                
+            # Print detailed values on the console
+            print("\n== PERSONAL OPERATING SYSTEM INTELLIGENCE ==\n"
+                  f"Academic Pressure: {pressures['academic_pressure']:.2f}\n"
+                  f"Energy Pressure:   {pressures['energy_pressure']:.2f}\n"
+                  f"Routine Pressure:  {pressures['routine_pressure']:.2f}\n"
+                  f"Overall Life Load: {pressures['overall_life_load']:.2f}\n"
+                  f"Active Guards:     {', '.join(pressures['active_guards']) if pressures['active_guards'] else 'None'}\n")
+                  
+            aria._speak(speech)
+        except Exception as e:
+            aria._speak(f"Personal OS briefing error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "life_briefing"}
+
+    # ─ Daily Briefing triggers ─
+    BRIEFING_TRIGGERS = [
+        "daily briefing", "morning briefing", "give me a briefing",
+        "what's my status", "what is my status", "project status",
+        "briefing", "chief of staff", "status report", "project report",
+        "morning report", "what should i work on today", "what's the plan"
+    ]
+    if any(t in inp for t in BRIEFING_TRIGGERS):
+        try:
+            from skills.daily_briefing import DailyBriefing
+            owner = getattr(aria, "known_user", "Chinmay").capitalize()
+            briefing_text = DailyBriefing().generate_short(owner_name=owner)
+            aria._speak(briefing_text)
+        except Exception as e:
+            aria._speak(f"I couldn't generate the briefing right now. Error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "daily_briefing"}
+
+    # ─ Decision Engine / ROI Task Recommendation ─
+    DECISION_TRIGGERS = [
+        "what should i work on tonight", "what should i work on",
+        "what should i do tonight", "what's my next move", "decide for me", "best task"
+    ]
+    if any(t in inp for t in DECISION_TRIGGERS):
+        try:
+            from skills.decision_engine import AriaDecisionEngine
+            decision = AriaDecisionEngine().analyze_best_move()
+            if decision["type"] == "CRITICAL_BLOCKER":
+                resp = f"Warning! Project {decision['project'].replace('_', ' ')} is currently blocked. You should focus on resolving the blocker: {decision['reason']}"
+            elif decision["type"] == "REST":
+                resp = decision["reason"]
+            else:
+                resp = f"I recommend you work on the task: {decision['task']} in project {decision['project'].replace('_', ' ')}. Reasoning: {decision['reason']}"
+            aria._speak(resp)
+        except Exception as e:
+            aria._speak(f"Decision engine error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "decision_query"}
+
+    # ─ Goal Drift Detection ─
+    DRIFT_TRIGGERS = [
+        "check goal drift", "any neglected goals", "check drift", "drift detector"
+    ]
+    if any(t in inp for t in DRIFT_TRIGGERS):
+        try:
+            from skills.drift_detector import AriaDriftDetector
+            drifts = AriaDriftDetector().analyze_drift(threshold_days=7)
+            if drifts:
+                resp = "I've detected drift in the following goals: "
+                for d in drifts:
+                    resp += f"Project {d['entity'].replace('_', ' ')} has been idle for {d['days_idle']} days, last tracked via {d['last_tracked_via']}. "
+            else:
+                resp = "All goals are currently on track. No drift detected in the last seven days."
+            aria._speak(resp)
+        except Exception as e:
+            aria._speak(f"Drift detector error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "drift_query"}
+
+    # ─ Weekly Review Summary ─
+    WEEKLY_TRIGGERS = [
+        "weekly review", "how was my week", "sunday review"
+    ]
+    if any(t in inp for t in WEEKLY_TRIGGERS):
+        try:
+            from skills.weekly_review import AriaWeeklyReview
+            report = AriaWeeklyReview().compile_weekly_report()
+            cleaned_report = report.replace("==", "").strip()
+            print(f"\n{report}\n")
+            aria._speak("I've compiled your weekly executive review on the console. Momentum winner is listed, along with neglected goals and accomplishments.")
+        except Exception as e:
+            aria._speak(f"Weekly review error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "weekly_review"}
+
+    # ─ Risk Projections & Warnings ─
+    RISK_TRIGGERS = [
+        "project risk", "what is at risk", "predict bottlenecks", "which project is most at risk"
+    ]
+    if any(t in inp for t in RISK_TRIGGERS):
+        try:
+            from skills.risk_predictor import AriaRiskPredictor
+            predictor = AriaRiskPredictor()
+            reports = predictor.analyze_all_risks()
+            
+            unstable = [r for r in reports if r["tier"] in ["ELEVATED", "CRITICAL"]]
+            
+            if "most at risk" in inp:
+                if reports:
+                    sorted_reports = sorted(reports, key=lambda x: x["risk_score"], reverse=True)
+                    most_risk = sorted_reports[0]
+                    if most_risk["risk_score"] > 0.1:
+                        resp = (
+                            f"The project most at risk is {most_risk['project'].replace('_', ' ')} "
+                            f"with a risk score of {most_risk['risk_score']} out of one point zero, putting it in the {most_risk['tier']} risk tier. "
+                            f"The main catalyst is: {most_risk['catalysts'][0]}"
+                        )
+                    else:
+                        resp = "All projects are currently fully stable. No active risks detected."
+                else:
+                    resp = "I couldn't find any active projects to analyze risk for."
+            else:
+                if not unstable:
+                    resp = "All projects are projecting as stable, Chinmay. Momentum vectors look clean across the board."
+                else:
+                    resp = "I've flagged potential risks on the following: "
+                    for r in unstable:
+                        resp += f"The {r['project'].replace('_', ' ')} vector is currently {r['tier']} with a score of {r['risk_score']}. Primary warning: {r['catalysts'][0]} "
+            aria._speak(resp)
+        except Exception as e:
+            aria._speak(f"Risk predictor error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "risk_query"}
+
+    # ─ Opportunity queries ─
+    OPPORTUNITY_TRIGGERS = [
+        "any opportunities", "strategic ideas", "generate insights", "check opportunities"
+    ]
+    if any(t in inp for t in OPPORTUNITY_TRIGGERS):
+        try:
+            from skills.opportunity_detector import AriaOpportunityDetector
+            detector = AriaOpportunityDetector()
+            ideas = detector.log_and_rank_all()
+            if not ideas:
+                resp = "No explicit multi-node connections found in the graph right now, Chinmay. Keep updating my memory as ideas develop."
+            else:
+                top = ideas[0]
+                resp = f"I found a strategic opportunity: {top['title']}. {top['description']}"
+            aria._speak(resp)
+        except Exception as e:
+            aria._speak(f"Opportunity detector error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "opportunity_query"}
+
+    # ─ Feedback routing (accept/dismiss) ─
+    import re
+    feedback_match = re.search(r'(accept|dismiss)\s+opportunity\s+(.+)', inp, re.IGNORECASE)
+    if feedback_match:
+        action = feedback_match.group(1).strip().lower()
+        title_query = feedback_match.group(2).strip()
+        try:
+            from skills.opportunity_detector import AriaOpportunityDetector
+            detector = AriaOpportunityDetector()
+            # Match title query against existing opportunities (case-insensitive substring match)
+            import sqlite3
+            conn = sqlite3.connect(detector.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT title FROM project_opportunity_history")
+            all_titles = [r[0] for r in cursor.fetchall()]
+            conn.close()
+            
+            matched_title = None
+            for t in all_titles:
+                if title_query.lower() in t.lower():
+                    matched_title = t
+                    break
+            
+            if matched_title:
+                detector.process_opportunity_feedback(matched_title, action + "ed")
+                aria._speak(f"Opportunity '{matched_title}' marked as {action}ed. Modifiers updated.")
+            else:
+                aria._speak(f"I couldn't find any generated opportunity matching '{title_query}'.")
+        except Exception as e:
+            aria._speak(f"Feedback processing error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "opportunity_feedback"}
+
+    # ─ Strategic Reflection patterns query ─
+    REFLECTION_TRIGGERS = [
+        "strategic reflection", "analyze patterns", "what are my habits", "reflection analyzer"
+    ]
+    if any(t in inp for t in REFLECTION_TRIGGERS):
+        try:
+            from skills.strategic_reflection import AriaStrategicReflection
+            reflector = AriaStrategicReflection()
+            rep = reflector.generate_reflection_report()
+            
+            # Formulate speech
+            speech = "I have completed a strategic reflection over our execution history. "
+            # Execution pattern
+            exec_p = rep["execution_patterns"][0]
+            speech += f"{exec_p} "
+            # Blocker trend
+            risk_p = rep["risk_patterns"][0]
+            speech += f"My risk trend sweep notes that: {risk_p} "
+            # Recommendation
+            speech += f"To optimize your current workflow, my recommendation is: {rep['recommendation']}"
+            
+            # Print full formatted report to terminal for visibility
+            full_report = reflector.get_reflection_context_string()
+            print(f"\n{full_report}\n")
+            
+            aria._speak(speech)
+        except Exception as e:
+            aria._speak(f"Strategic reflection error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "strategic_reflection"}
+
+
+
+    # ─ Priority question ─
+    PRIORITY_TRIGGERS = [
+        "what's my top priority", "what is my top priority",
+        "highest priority", "most important task", "what should i focus on"
+    ]
+    if any(t in inp for t in PRIORITY_TRIGGERS):
+        try:
+            from skills.priority_engine import PriorityEngine
+            top = PriorityEngine().get_top_priority()
+            if top:
+                resp = (
+                    f"Your highest priority is {top['project'].replace('_', ' ')} "
+                    f"with a score of {top['priority_score']} out of ten. "
+                    f"Current focus: {top['focus']}. Reason: {top['reason']}."
+                )
+            else:
+                resp = "I couldn't determine a top priority. Make sure you have active projects."
+            aria._speak(resp)
+        except Exception as e:
+            aria._speak(f"Priority engine error: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "priority_query"}
+
+    # ─ Mark task done (e.g. "mark Native Android STT as done") ─
+    import re
+    done_match = re.search(
+        r'(?:mark|complete|finish|done with|finished)\s+(.+?)\s+(?:as done|as complete|complete|done|finished)$',
+        inp, re.IGNORECASE
+    )
+    if done_match:
+        task_name = done_match.group(1).strip()
+        try:
+            from skills.project_state_manager import ProjectStateManager
+            psm = ProjectStateManager()
+            # Try to find which project contains this task
+            projects = psm.get_all_projects()
+            result = None
+            for proj_name, proj_data in projects.items():
+                pending_raw = proj_data.get("pending_tasks", [])
+                pending = [(t["task_name"] if isinstance(t, dict) else t).lower() for t in pending_raw]
+                if task_name.lower() in pending:
+                    # Match the correct case and type
+                    real_task_obj = next(t for t in pending_raw if (t["task_name"] if isinstance(t, dict) else t).lower() == task_name.lower())
+                    real_task_name = real_task_obj["task_name"] if isinstance(real_task_obj, dict) else real_task_obj
+                    result = psm.complete_task(proj_name, real_task_name)
+                    break
+            if result:
+                aria._speak(f"Got it. I've marked '{task_name}' as complete. {result}")
+            else:
+                aria._speak(f"I couldn't find a task called '{task_name}' in your pending lists.")
+        except Exception as e:
+            aria._speak(f"Error completing task: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "task_complete"}
+
+    # ─ Add blocker (e.g. "add blocker Android SDK missing") ─
+    blocker_match = re.search(r'(?:add blocker|log blocker|there\'?s? a blocker|blocked by)\s+(.+)', inp, re.IGNORECASE)
+    if blocker_match:
+        blocker_text = blocker_match.group(1).strip()
+        try:
+            from skills.project_state_manager import ProjectStateManager
+            psm = ProjectStateManager()
+            ranked = list(psm.get_all_projects().keys())
+            if ranked:
+                top_project = ranked[0]
+                result = psm.add_blocker(top_project, blocker_text)
+                aria._speak(f"Blocker logged for {top_project.replace('_', ' ')}: {blocker_text}")
+            else:
+                aria._speak("No active projects found to attach the blocker to.")
+        except Exception as e:
+            aria._speak(f"Error logging blocker: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "blocker_added"}
+
+    # ─ Log milestone (e.g. "log milestone Phase 4 complete") ─
+    milestone_match = re.search(r'(?:log milestone|milestone|achieved)\s+(.+)', inp, re.IGNORECASE)
+    if milestone_match:
+        milestone_text = milestone_match.group(1).strip()
+        try:
+            from skills.project_state_manager import ProjectStateManager
+            psm = ProjectStateManager()
+            projects = psm.get_all_projects()
+            if projects:
+                top_project = list(projects.keys())[0]
+                psm.log_milestone(top_project, milestone_text, importance=9)
+                aria._speak(f"Milestone logged: {milestone_text}. Added to {top_project.replace('_', ' ')} timeline.")
+            else:
+                aria._speak("No active projects to log a milestone for.")
+        except Exception as e:
+            aria._speak(f"Error logging milestone: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "milestone_logged"}
+
+    # ─ Update focus (e.g. "update focus to Face confidence tuning") ─
+    focus_match = re.search(r'(?:update focus to|focus on|switch focus to|change focus to)\s+(.+)', inp, re.IGNORECASE)
+    if focus_match:
+        new_focus = focus_match.group(1).strip()
+        try:
+            from skills.project_state_manager import ProjectStateManager
+            psm = ProjectStateManager()
+            projects = psm.get_all_projects()
+            if projects:
+                top_project = list(projects.keys())[0]
+                psm.update_focus(top_project, new_focus)
+                aria._speak(f"Focus updated to '{new_focus}' for {top_project.replace('_', ' ')}.")
+            else:
+                aria._speak("No active project to update focus for.")
+        except Exception as e:
+            aria._speak(f"Error updating focus: {e}")
+        return {"handled": True, "action": "chief_of_staff", "response": "focus_updated"}
+
+    return {"handled": False}
+

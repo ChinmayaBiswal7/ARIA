@@ -898,6 +898,14 @@
       const hubState = document.getElementById("hub-state");
       const statusDisp = document.getElementById("status-display");
 
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast("Text-only mode active");
+        statusDisp.textContent = "Microphone API not supported. Text-only control active.";
+        isInitialized = true;
+        overlay.classList.add("hidden");
+        return;
+      }
+
       try {
         // 1. Get microphone access for Web Audio analysis
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -917,53 +925,59 @@
         sphere.audioDataArray = dataArray;
 
         // 2. Setup always-on Speech Recognition
-        if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
-          const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-          recognition = new SR();
-          recognition.continuous = true;
-          recognition.interimResults = false;
-          recognition.lang = "en-US";
+        try {
+          if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SR();
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.lang = "en-US";
 
-          recognition.onstart = () => {
-            shouldListen = true;
-            sphere.setState("listening");
-            hubState.textContent = "LISTENING";
-            hubState.style.color = "var(--green)";
-          };
+            recognition.onstart = () => {
+              shouldListen = true;
+              sphere.setState("listening");
+              hubState.textContent = "LISTENING";
+              hubState.style.color = "var(--green)";
+            };
 
-          recognition.onend = () => {
-            // Auto-restart recognition loop immediately to keep it "always online"
-            if (shouldListen) {
-              try {
-                recognition.start();
-              } catch(e) {
-                // Already started
+            recognition.onend = () => {
+              // Auto-restart recognition loop immediately to keep it "always online"
+              if (shouldListen) {
+                try {
+                  recognition.start();
+                } catch(e) {
+                  // Already started
+                }
               }
-            }
-          };
+            };
 
-          recognition.onerror = (e) => {
-            console.log("Speech recognition error: ", e);
-            // Restart loop
-            if (shouldListen && e.error !== "not-allowed") {
-              setTimeout(() => {
-                try { recognition.start(); } catch(err) {}
-              }, 400);
-            }
-          };
+            recognition.onerror = (e) => {
+              console.log("Speech recognition error: ", e);
+              // Restart loop
+              if (shouldListen && e.error !== "not-allowed") {
+                setTimeout(() => {
+                  try { recognition.start(); } catch(err) {}
+                }, 400);
+              }
+            };
 
-          recognition.onresult = e => {
-            const resultIdx = e.resultIndex;
-            const t = e.results[resultIdx][0].transcript;
-            
-            // Only send if it contains speech
-            if (t.trim()) {
-              showToast('Speech: "' + t + '"');
-              sendCommand(t);
-            }
-          };
-        } else {
-          showToast("Speech recognition not supported on this browser.");
+            recognition.onresult = e => {
+              const resultIdx = e.resultIndex;
+              const t = e.results[resultIdx][0].transcript;
+              
+              // Only send if it contains speech
+              if (t.trim()) {
+                showToast('Speech: "' + t + '"');
+                sendCommand(t);
+              }
+            };
+          } else {
+            showToast("Speech recognition not supported on this browser.");
+          }
+        } catch (srErr) {
+          console.error("SpeechRecognition setup failed:", srErr);
+          showToast("Speech recognition unavailable.");
+          recognition = null;
         }
 
         // Mark initialized
@@ -975,20 +989,25 @@
         connDot.className = "status-dot waiting";
         
         // Play vocal greeting to confirm audio is fully unlocked
-        speakText("Aria remote online. Listening.");
-        statusDisp.textContent = "Listening continuously... just speak anytime.";
+        speakText("Aria remote online.");
+        statusDisp.textContent = "Aria remote online. Connected.";
 
         // Start Speech Recognition loop
         if (recognition) {
-          recognition.start();
+          try {
+            recognition.start();
+          } catch (startErr) {
+            console.error("SpeechRecognition start failed:", startErr);
+            showToast("Voice recognition failed to start.");
+          }
         }
-
-        // 3. Connect to Firestore Live Status Listener
-        connectFirestore();
 
       } catch (err) {
         console.error("Initialization failed: ", err);
-        showToast("Permission denied: Mic access required.");
+        showToast("Mic permission denied. Using text control.");
+        statusDisp.textContent = "Microphone access denied. Voice controls disabled, but you can still use the console and shortcuts.";
+        isInitialized = true;
+        overlay.classList.add("hidden");
       }
     }
 
@@ -1040,6 +1059,9 @@
         sphere.setState("error");
       });
     }
+
+    // Connect to Firebase status sync immediately on load
+    connectFirestore();
 
     // ── Send Command ─────────────────────────────────────────────────────────
     function sendCommand(text) {

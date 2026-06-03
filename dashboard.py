@@ -1,7 +1,8 @@
 import os
 import psutil
 from fastapi import FastAPI, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from skills.event_bus import EventBus
 from skills.runtime_capabilities import CAPABILITIES
@@ -9,6 +10,9 @@ try:
     from skills.subsystem_health import HEALTH as _SUBSYSTEM_HEALTH
 except Exception:
     _SUBSYSTEM_HEALTH = None
+
+from skills.health_skill import HealthSkill
+health_skill_instance = HealthSkill()
 
 class CognitionState:
     # Active execution stats
@@ -78,8 +82,102 @@ class CognitionState:
 
 app = FastAPI(title="ARIA Control Center")
 
+# ── Static File Mounts & PWA Helpers ─────────────────────────────────────────
+remote_dist_path = os.path.join(os.path.dirname(__file__), "remote", "dist")
+if os.path.exists(remote_dist_path):
+    # Mount the /assets sub-folder from the built React app
+    assets_dir = os.path.join(remote_dist_path, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="remote_assets")
+
+public_path = os.path.join(os.path.dirname(__file__), "public")
+if os.path.exists(public_path):
+    app.mount("/public", StaticFiles(directory=public_path), name="public")
+
+@app.get("/login.html")
+def serve_login():
+    if os.path.exists(remote_dist_path):
+        idx = os.path.join(remote_dist_path, "index.html")
+        if os.path.exists(idx):
+            return FileResponse(idx)
+    p_idx = os.path.join(public_path, "index.html")
+    if os.path.exists(p_idx):
+        return FileResponse(p_idx)
+    c_path = os.path.join(os.path.dirname(__file__), "controller.html")
+    if os.path.exists(c_path):
+        return FileResponse(c_path)
+    return HTMLResponse("<h2>No remote interface files found on server</h2>", status_code=404)
+
+@app.get("/controller.html")
+def serve_controller():
+    c_path = os.path.join(os.path.dirname(__file__), "controller.html")
+    if os.path.exists(c_path):
+        return FileResponse(c_path)
+    p_idx = os.path.join(public_path, "index.html")
+    if os.path.exists(p_idx):
+        return FileResponse(p_idx)
+    return HTMLResponse("<h2>No controller interface files found on server</h2>", status_code=404)
+
+@app.get("/dashboard.html")
+def serve_dashboard_html():
+    return serve_dashboard()
+
+@app.get("/manifest.json")
+def get_manifest():
+    for base in [remote_dist_path, os.path.join(os.path.dirname(__file__), "remote", "public"), public_path]:
+        path = os.path.join(base, "manifest.json")
+        if os.path.exists(path):
+            return FileResponse(path)
+    return Response(status_code=404)
+
+@app.get("/sw.js")
+def get_sw():
+    for base in [remote_dist_path, os.path.join(os.path.dirname(__file__), "remote", "public"), public_path]:
+        path = os.path.join(base, "sw.js")
+        if os.path.exists(path):
+            return FileResponse(path, media_type="application/javascript")
+    return Response(status_code=404)
+
+@app.get("/favicon.svg")
+def get_favicon():
+    for base in [remote_dist_path, os.path.join(os.path.dirname(__file__), "remote", "public"), public_path]:
+        path = os.path.join(base, "favicon.svg")
+        if os.path.exists(path):
+            return FileResponse(path, media_type="image/svg+xml")
+    return Response(status_code=404)
+
+@app.get("/icon-192.png")
+def get_icon192():
+    for base in [remote_dist_path, os.path.join(os.path.dirname(__file__), "remote", "public"), public_path]:
+        path = os.path.join(base, "icon-192.png")
+        if os.path.exists(path):
+            return FileResponse(path, media_type="image/png")
+    return Response(status_code=404)
+
+@app.get("/icon-512.png")
+def get_icon512():
+    for base in [remote_dist_path, os.path.join(os.path.dirname(__file__), "remote", "public"), public_path]:
+        path = os.path.join(base, "icon-512.png")
+        if os.path.exists(path):
+            return FileResponse(path, media_type="image/png")
+    return Response(status_code=404)
+
 class ModeUpdate(BaseModel):
     mode: str
+
+@app.get("/api/fitness/latest")
+def get_fitness_latest():
+    try:
+        return health_skill_instance.get_latest_metrics() or {}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/fitness/history")
+def get_fitness_history():
+    try:
+        return health_skill_instance.get_recent_history(days=7) or []
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/api/failures")
 def get_failures():

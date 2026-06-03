@@ -10,9 +10,36 @@ class MemorySkill:
     
     def __init__(self):
         self._init_db()
+        self._seed_timeline_data()
 
     def _get_connection(self):
         return sqlite3.connect(DB_PATH)
+
+    def _seed_timeline_data(self):
+        import time
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM project_timeline")
+            count = cursor.fetchone()[0]
+            if count == 0:
+                print("[MemorySkill] Seeding default project timeline data...")
+                now = int(time.time())
+                five_days_ago = now - 5 * 86400
+                three_days_ago = now - 3 * 86400
+                two_days_ago = now - 2 * 86400
+                one_day_ago = now - 1 * 86400
+
+                seeds = [
+                    ("ARIA_Android_App", five_days_ago, "project_started", "Started Android wrapper development.", "System Initialization", 8),
+                    ("ARIA_Android_App", three_days_ago, "task_completed", "Phone voice routing and communication framework fixed.", "System Initialization", 9),
+                    ("ARIA_Android_App", two_days_ago, "task_completed", "Face diagnostics integrated safely into startup routine.", "System Initialization", 7),
+                    ("ARIA_Android_App", one_day_ago, "task_completed", "Advanced Layer 3 Knowledge Graph and SQLite relationship engine verified.", "System Initialization", 10)
+                ]
+                cursor.executemany("""
+                    INSERT INTO project_timeline (project_name, timestamp, event_type, description, source, importance)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, seeds)
+                conn.commit()
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -76,6 +103,32 @@ class MemorySkill:
                     UNIQUE(source, relation, target)
                 )
             """)
+            # Advanced Knowledge Graph nodes table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS knowledge_graph_nodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type TEXT NOT NULL,
+                    name TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    confidence REAL DEFAULT 1.0,
+                    importance REAL DEFAULT 0.5
+                )
+            """)
+            # Advanced Knowledge Graph edges table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS knowledge_graph_edges (
+                    source_id INTEGER,
+                    relation TEXT NOT NULL,
+                    target_id INTEGER,
+                    confidence REAL DEFAULT 0.5,
+                    last_seen INTEGER NOT NULL,
+                    source TEXT,
+                    PRIMARY KEY (source_id, relation, target_id),
+                    FOREIGN KEY (source_id) REFERENCES knowledge_graph_nodes(id) ON DELETE CASCADE,
+                    FOREIGN KEY (target_id) REFERENCES knowledge_graph_nodes(id) ON DELETE CASCADE
+                )
+            """)
+
             # Persistent Task Tree Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS task_tree (
@@ -120,6 +173,19 @@ class MemorySkill:
                     success_count INTEGER DEFAULT 0,
                     failure_count INTEGER DEFAULT 0,
                     weight REAL DEFAULT 1.0
+                )
+            """)
+            # Project Timeline Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS project_timeline (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_name TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    importance INTEGER DEFAULT 5,
+                    metadata TEXT
                 )
             """)
             conn.commit()
@@ -528,5 +594,37 @@ class MemorySkill:
             cursor.execute("SELECT strategy_key, success_count, failure_count, weight FROM strategy_weights ORDER BY weight DESC")
             rows = cursor.fetchall()
             return {r[0]: {"success": r[1], "failures": r[2], "weight": r[3]} for r in rows}
+
+    def log_timeline_event(self, project_name, event_type, description, source="User Interaction", importance=5, metadata=None):
+        import time
+        import json
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            meta_str = json.dumps(metadata) if metadata else None
+            cursor.execute("""
+                INSERT INTO project_timeline (project_name, timestamp, event_type, description, source, importance, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (project_name.strip(), int(time.time()), event_type.strip(), description.strip(), source.strip(), importance, meta_str))
+            conn.commit()
+        print(f"[Timeline Logged] {project_name} -> {event_type}: {description}")
+
+    def get_project_timeline_context(self, project_name, limit=5):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT datetime(timestamp, 'unixepoch'), description, importance, event_type
+                FROM project_timeline
+                WHERE project_name = ?
+                ORDER BY timestamp DESC LIMIT ?
+            """, (project_name.strip(), limit))
+            rows = cursor.fetchall()
+            
+        if not rows:
+            return ""
+            
+        context_str = f"== {project_name} HISTORICAL MOMENTUM ==\n"
+        for ts_str, desc, importance, event_type in reversed(rows):
+            context_str += f"- [{ts_str}] {event_type}: {desc} (importance: {importance})\n"
+        return context_str
 
 

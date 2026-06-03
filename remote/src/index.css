@@ -33,7 +33,7 @@ body {
   overflow-x: hidden;
 }
 
-/* ── Top Bar ── */
+/* Ã¢â€â‚¬Ã¢â€â‚¬ Top Bar Ã¢â€â‚¬Ã¢â€â‚¬ */
 .topbar {
   display: flex;
   align-items: center;
@@ -109,7 +109,7 @@ body {
   animation: blink 1.5s infinite; 
 }
 
-/* ── Hero Panel ── */
+/* Ã¢â€â‚¬Ã¢â€â‚¬ Hero Panel Ã¢â€â‚¬Ã¢â€â‚¬ */
 .hero-panel {
   height: 100dvh;
   display: flex;
@@ -239,7 +239,7 @@ body {
   fill: currentColor;
 }
 
-/* ── Controls Container ── */
+/* Ã¢â€â‚¬Ã¢â€â‚¬ Controls Container Ã¢â€â‚¬Ã¢â€â‚¬ */
 .controls-container {
   background: #060712;
   background-image: radial-gradient(ellipse at 50% 0%, #130f2b 0%, #060712 80%);
@@ -454,7 +454,7 @@ input[type="text"]::placeholder {
   opacity: 1; 
 }
 
-/* ── Launch Section CSS ── */
+/* Ã¢â€â‚¬Ã¢â€â‚¬ Launch Section CSS Ã¢â€â‚¬Ã¢â€â‚¬ */
 .launch-intro {
   margin-bottom: 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -610,7 +610,7 @@ input[type="text"]::placeholder {
   color: rgba(167, 139, 250, 1);
 }
 
-/* ── Screen Feedback Responsive Styles ── */
+/* Ã¢â€â‚¬Ã¢â€â‚¬ Screen Feedback Responsive Styles Ã¢â€â‚¬Ã¢â€â‚¬ */
 .screen-feedback {
   margin: 20px auto;
   width: calc(100% - 16px);
@@ -655,6 +655,27 @@ input[type="text"]::placeholder {
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0,0,0,0.5);
   transition: border-color 0.3s;
+}
+
+.screen-image-container.fullscreen-active {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99999 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #000 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+.screen-image-container.fullscreen-active .screen-image {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
 }
 
 .screen-image-container:hover {
@@ -751,5 +772,3 @@ input[type="text"]::placeholder {
 .fullscreen-toggle-overlay-btn:active {
   transform: scale(0.95);
 }
-
-

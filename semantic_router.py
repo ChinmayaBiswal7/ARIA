@@ -113,6 +113,13 @@ class SemanticRouter:
             pass
 
         has_valid_context = bool(resolved_context or resolved_object or resolved_step or self.task_manager.get_active_task() or browser_active)
+        
+        if intent == "followup" and not has_valid_context:
+            if normalized.strip().lower() in {"yes", "no", "yep", "nah", "sure", "correct", "wrong", "confirm", "ok", "okay"}:
+                intent = "chat"
+                intent_confidence = 0.95
+                intent_meta = self.classifier.get_intent_metadata(intent)
+
         tool_arming = evaluate_tool_arming(
             intent,
             intent_confidence,

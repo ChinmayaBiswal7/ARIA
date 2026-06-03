@@ -6,7 +6,7 @@ import time
 CONFIG_PATH = "firebase_config.json"
 SERVICE_ACCOUNT_PATH = "serviceAccountKey.json"
 
-def test_sdk_connection(project_id):
+def verify_sdk_connection(project_id):
     print("\n[SDK Mode] Initializing secure Firebase Admin SDK...")
     try:
         import firebase_admin
@@ -32,7 +32,7 @@ def test_sdk_connection(project_id):
         print(f"[SDK Mode] Connection failed: {e}")
         return False
 
-def test_rest_connection(project_id):
+def verify_rest_connection(project_id):
     import urllib.request
     print("\n[REST Mode] Testing public REST API fallback...")
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/status/latest"
@@ -84,13 +84,13 @@ def main():
     print(f"Service Account File Found: {sdk_available}")
 
     if sdk_available:
-        sdk_success = test_sdk_connection(project_id)
+        sdk_success = verify_sdk_connection(project_id)
         if sdk_success:
             print("\n[CONCLUSION] Realtime SDK Mode is FULLY OPERATIONAL. You can lock your Firestore rules now.")
             return
             
     # Try REST fallback
-    rest_success = test_rest_connection(project_id)
+    rest_success = verify_rest_connection(project_id)
     
     if not sdk_available and not rest_success:
         print("\n[CONCLUSION] Action Required: Please verify your Firebase settings and rules.")

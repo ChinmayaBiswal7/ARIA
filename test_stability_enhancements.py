@@ -141,7 +141,7 @@ class TestFaceRecognitionStability(unittest.TestCase):
         # Setup active locked identity
         self.aria.known_user = "chinmay"
         self.aria.known_user_confidence = "high"
-        self.aria.last_identity_match_time = time.time()
+        self.aria.last_identity_match_time = time.time() - 40.0
         self.aria.known_user_similarity = 0.88
         
         # identify_user returns the locked name
@@ -169,7 +169,7 @@ class TestFaceRecognitionStability(unittest.TestCase):
         # Setup active locked identity
         self.aria.known_user = "chinmay"
         self.aria.known_user_confidence = "high"
-        self.aria.last_identity_match_time = time.time()
+        self.aria.last_identity_match_time = time.time() - 40.0
         self.aria.known_user_similarity = 0.88
         
         # First query returns different user "rahul", triggering lock break

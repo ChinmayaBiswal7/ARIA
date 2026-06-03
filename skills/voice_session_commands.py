@@ -43,23 +43,44 @@ def sanitize_spoken_text(aria, text):
     return cleaned or text
 
 
-def speak(aria, text):
+def speak(aria, text, source=None, allow_barge_in=True):
+    print(f"[VoiceSessionCommands/speak] Entry text: {text[:100]}")
     if hasattr(aria, "conversation_session") and aria.conversation_session.session_active:
         aria._mark_conversation_activity(wake_reason="assistant_reply")
     text = sanitize_spoken_text(aria, text)
     if hasattr(aria, "_spoken_during_turn") and aria._spoken_during_turn is not None:
         aria._spoken_during_turn.append(text)
-    is_remote = False
-    if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
-        if getattr(aria.firebase_sync, "current_command_id", None) is not None:
-            is_remote = True
-            
-    if is_remote or getattr(aria._reply_context, "phone_only", False):
+        
+    # Resolve source:
+    if source is None:
+        is_remote = False
+        if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
+            if getattr(aria.firebase_sync, "current_command_id", None) is not None:
+                is_remote = True
+        if is_remote or getattr(aria._reply_context, "phone_only", False):
+            source = "phone"
+        else:
+            source = "laptop"
+
+    print(f"[Input Source] {source}")
+    
+    if source == "phone":
+        print(f"[Output Route] phone_tts")
         print(f"[ARIA/Phone Reply] {text}")
         if hasattr(aria, 'firebase_sync') and aria.firebase_sync:
             aria.firebase_sync.update_status(text, status_str="idle")
+            if aria.firebase_sync.firestore_client:
+                try:
+                    aria.firebase_sync.firestore_client.collection("phone_reply").document("latest").set({
+                        "response": text,
+                        "timestamp": time.time()
+                    })
+                except Exception as db_err:
+                    print(f"[VoiceSessionCommands] Could not write to phone_reply/latest: {db_err}")
         return
 
+    # Output route is laptop
+    print(f"[Output Route] laptop_tts")
 
     # Graceful TTS degradation — if TTS subsystem is FAILED, fall back to console
     if not HEALTH.is_available(SUBSYSTEM_TTS):
@@ -72,10 +93,10 @@ def speak(aria, text):
 
     # Push to the thread-safe queue for sequential processing
     if aria.speech_queue:
-        aria.speech_queue.put(text)
+        aria.speech_queue.put((text, allow_barge_in))
     else:
         if aria.voice:
-            aria.voice.speak(text)
+            aria.voice.speak(text, allow_barge_in=allow_barge_in)
 
 
 def wait_for_speech(aria):
@@ -89,9 +110,28 @@ def speech_worker(aria):
     while True:
         try:
             # Blocks until an item is available
-            text = aria.speech_queue.get()
-            if text is None:
+            item = aria.speech_queue.get()
+            if item is None:
                 break
+            if isinstance(item, tuple):
+                text, allow_barge_in = item
+            else:
+                text = item
+                allow_barge_in = True
+            print(f"[SpeechWorker] Got text from queue: {text[:100]} (allow_barge_in={allow_barge_in})")
+
+            if aria.voice and aria.voice.is_user_actively_speaking:
+                print("[SpeechWorker] User is actively speaking. Discarding response and clearing queues.")
+                while not aria.speech_queue.empty():
+                    try:
+                        aria.speech_queue.get_nowait()
+                        aria.speech_queue.task_done()
+                    except Exception:
+                        break
+                if hasattr(aria, "pending_speech"):
+                    aria.pending_speech.clear()
+                aria.speech_queue.task_done()
+                continue
 
             set_state("SPEAKING")
             set_text(text[:100] + "..." if len(text) > 100 else text)
@@ -109,7 +149,7 @@ def speech_worker(aria):
 
             # Speak using Edge-TTS (blocks this worker thread)
             try:
-                interrupted = aria.voice.speak(text)
+                interrupted = aria.voice.speak(text, allow_barge_in=allow_barge_in)
                 # Mark TTS healthy on successful speak
                 if HEALTH.get_status(SUBSYSTEM_TTS) != "HEALTHY":
                     HEALTH.mark_healthy(SUBSYSTEM_TTS, "TTS recovered — speak succeeded")
@@ -134,6 +174,9 @@ def speech_worker(aria):
                         aria.speech_queue.task_done()
                     except Exception:
                         break
+                
+                if hasattr(aria, "pending_speech"):
+                    aria.pending_speech.clear()
                         
                 set_state("IDLE")
                 if hasattr(aria, 'firebase_sync') and aria.firebase_sync:

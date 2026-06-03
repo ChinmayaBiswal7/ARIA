@@ -19,6 +19,11 @@ import json
 PROJECT_DIR = r"c:\D FOLDER\Projects\AI"
 
 class SecurityGuard:
+    LEVEL_GUEST = 0
+    LEVEL_RECOGNIZED = 1
+    LEVEL_TRUSTED = 2
+    LEVEL_OWNER = 3
+
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
         self.admin_mode_active = False
@@ -168,15 +173,70 @@ class SecurityGuard:
             
         return "safe"
 
-    def verify_agent_action_tag(self, tag):
-        """Verifies bracketed action tags in ARIA replies (like [SHUTDOWN], [RESTART])."""
+    def get_user_access_level(self, username):
+        """Query SQLite user preferences to get access level for the username."""
+        username_clean = (username or "").strip().strip('.').lower()
+        if not username_clean or username_clean in ["unknown", "guest"]:
+            return self.LEVEL_GUEST
+            
+        if username_clean in ["chinmay", "chinmaya"]:
+            return self.LEVEL_OWNER
+            
+        # Try database lookups via memory_manager
+        if self.memory_manager:
+            try:
+                import sqlite3
+                conn = sqlite3.connect(self.memory_manager.db_path)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT pref_value FROM user_preferences WHERE username = ? AND pref_key = 'access_level'",
+                    (username_clean,)
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    try:
+                        return int(row[0])
+                    except ValueError:
+                        role_str = str(row[0]).lower()
+                        if "owner" in role_str: return self.LEVEL_OWNER
+                        if "trusted" in role_str: return self.LEVEL_TRUSTED
+                        if "recognized" in role_str: return self.LEVEL_RECOGNIZED
+                        return self.LEVEL_GUEST
+            except Exception as e:
+                print(f"[SecurityGuard] SQLite error looking up access level: {e}")
+                
+        # Default fallback for any enrolled face not matching chinmay
+        return self.LEVEL_TRUSTED
+
+    def verify_agent_action_tag(self, tag, user_name=None):
+        """Verifies bracketed action tags against current user access level."""
         tag_lower = tag.lower()
         
         # 1. Blocklist check
         for kw in self.blocked_keywords:
             if kw in tag_lower:
                 return False, f"Contains blocked command keyword: {kw}"
+        
+        # Get access level for user
+        access_level = self.get_user_access_level(user_name)
+        
+        # Define required levels for actions
+        # Direct PC commands / shell execution require Owner (Level 3)
+        if any(x in tag_lower for x in ["[shutdown]", "[restart]", "[run_shell]", "[shell]", "[powershell]", "[cmd]", "[delete_file]", "[delete_folder]"]):
+            if access_level < self.LEVEL_OWNER:
+                return False, f"Command '{tag}' requires Owner access level (Level 3)."
+        
+        # Browser / app open/close/focus actions require Trusted User (Level 2)
+        elif any(x in tag_lower for x in ["[open:", "[close:", "[click", "[focus", "[type", "[press"]):
+            if access_level < self.LEVEL_TRUSTED:
+                return False, f"Command '{tag}' requires Trusted User access level (Level 2)."
                 
+        # Any other action tags require Recognized User (Level 1)
+        else:
+            if access_level < self.LEVEL_RECOGNIZED:
+                return False, f"Command '{tag}' requires Recognized User access level (Level 1)."
+
         # 2. Block direct shutdown/restart tags unless admin is authenticated
         if "[shutdown]" in tag_lower or "[restart]" in tag_lower:
             if not self.is_admin_active():

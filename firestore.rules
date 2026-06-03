@@ -13,5 +13,16 @@ service cloud.firestore {
       allow write: if true;
       allow read: if false; // only laptop reads this
     }
+
+    // Phone/Bridge can read and write health data
+    match /health/{doc} {
+      allow read, write: if true;
+    }
+
+    // Phone can write voice_audio metadata if user is "remote". Bypassed by laptop admin SDK.
+    match /voice_audio/{doc} {
+      allow write: if request.resource.data.user == "remote";
+      allow read: if false;
+    }
   }
 }

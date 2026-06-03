@@ -158,7 +158,7 @@ class VisionLearner:
                         # Draw blue box for faces
                         cv2.rectangle(display, (fx, fy), (fx+fw, fy+fh), (255, 150, 50), 2)
                         # Identify
-                        name = self.face_mem.identify_face(frame[fy:fy+fh, fx:fx+fw])
+                        name = self.face_mem.identify_face(frame[fy:fy+fh, fx:fx+fw], is_already_cropped=True)
                         # Label
                         (tw, th), _ = cv2.getTextSize(name.upper(), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
                         cv2.rectangle(display, (fx, fy - th - 8), (fx + tw + 6, fy), (255, 150, 50), -1)

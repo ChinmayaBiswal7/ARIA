@@ -103,7 +103,7 @@ def enroll_face(aria, inp, face_trigger_found, user_input):
     faces = []
     if w >= 30 and h >= 30:
         try:
-            faces = aria.memory.face_cascade.detectMultiScale(gray, 1.3, 5)
+            faces = aria.memory.face_cascade.detectMultiScale(gray, 1.1, 4)
         except Exception as e:
             print(f"[Main] Face detection error: {e}")
     
@@ -202,11 +202,11 @@ def face_mode(aria, inp, user_input, image=None):
         
         if frame is not None:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = aria.memory.detect_faces(gray, scale_factor=1.3, min_neighbors=5)
+            faces = aria.memory.detect_faces(gray, scale_factor=1.1, min_neighbors=4)
             if len(faces) > 0:
                 fx, fy, fw, fh = faces[0]
                 face_crop = frame[fy:fy+fh, fx:fx+fw]
-                name = aria.memory.identify_face(face_crop)
+                name = aria.memory.identify_face(face_crop, is_already_cropped=True)
                 if name and name != "Unknown":
                     aria._speak(f"I can see {name} in the room.")
                     return "identified_face_" + name
