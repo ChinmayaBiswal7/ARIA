@@ -3,6 +3,7 @@ import speech_recognition as sr
 import threading
 import time
 import os
+import re
 import asyncio
 import edge_tts
 import pygame
@@ -36,7 +37,14 @@ class Voice:
         self.microphone = None
         self._init_mic()
         self.noise_profile = None
-        self.calibrate_noise_profile(1.0)
+        threading.Thread(target=self.calibrate_noise_profile, args=(1.0,), daemon=True).start()
+
+        
+        # Multi-language support properties
+        self.current_language = "en"
+        self.english_turns_count = 0
+        self.available_voices = []
+        self._load_available_voices()
         from wake_word import WakeWordDetector
         self.wake_word_detector = WakeWordDetector()
         self.wake_word_detector.set_transcriber(self.whisper_transcribe)
@@ -312,6 +320,18 @@ class Voice:
         except Exception as e:
             print(f'[Voice] Audio Mixer Init Error: {e}')
 
+    def _load_available_voices(self):
+        def _load():
+            try:
+                voices = asyncio.run(edge_tts.list_voices())
+                self.available_voices = [v['ShortName'] for v in voices]
+                print(f"[Voice] Loaded {len(self.available_voices)} available Edge-TTS voices (async).")
+            except Exception as e:
+                print(f"[Voice] Error loading available Edge-TTS voices: {e}")
+                self.available_voices = []
+        threading.Thread(target=_load, daemon=True).start()
+
+
     def _get_windows_volume(self):
         try:
             from ctypes import cast, POINTER
@@ -403,7 +423,10 @@ class Voice:
             print(f"[pygame Mixer Volume] {current_vol}%")
             print(f"[TTS Text Length] {len(clean)} chars")
 
-            print(f'[ARIA]: {clean}')
+            try:
+                print(f'[ARIA]: {clean}')
+            except UnicodeEncodeError:
+                print(f'[ARIA]: {clean.encode("ascii", "backslashreplace").decode("ascii")}')
             if pygame.mixer.music.get_busy():
                 pygame.mixer.music.stop()
                 try:
@@ -446,6 +469,49 @@ class Voice:
                     print(f'[Voice/ElevenLabs] Failed: {e}. Falling back to Edge-TTS.')
             if not generated:
                 try:
+                    # Switch the voice model dynamically based on self.current_language
+                    # Switch the voice model dynamically based on text script rather than just self.current_language
+                    is_clean_ascii = False
+                    if clean:
+                        try:
+                            clean.encode('ascii')
+                            is_clean_ascii = True
+                        except UnicodeEncodeError:
+                            is_clean_ascii = False
+                            
+                    current_lang = getattr(self, "current_language", "en")
+                    if is_clean_ascii:
+                        current_lang = "en"
+                    else:
+                        if re.search(r"[\u0900-\u097F]", clean):
+                            current_lang = "hi"
+                        elif re.search(r"[\u0B00-\u0B7F]", clean):
+                            current_lang = "or"
+
+                    if current_lang == "hi":
+                        if "hi-IN-MadhuramNeural" in self.available_voices:
+                            self.voice_model = "hi-IN-MadhuramNeural"
+                        elif "hi-IN-SwaraNeural" in self.available_voices:
+                            self.voice_model = "hi-IN-SwaraNeural"
+                        else:
+                            hi_voices = [v for v in self.available_voices if "hi-IN" in v]
+                            self.voice_model = hi_voices[0] if hi_voices else "hi-IN-MadhuramNeural"
+                    elif current_lang == "or":
+                        if "or-IN-OdiaNeural" in self.available_voices:
+                            self.voice_model = "or-IN-OdiaNeural"
+                        elif "or-IN-SukanyaNeural" in self.available_voices:
+                            self.voice_model = "or-IN-SukanyaNeural"
+                        else:
+                            print("[Voice/LanguageFallback] Odia voice not available in Edge-TTS. Falling back to Hindi.")
+                            if "hi-IN-MadhuramNeural" in self.available_voices:
+                                self.voice_model = "hi-IN-MadhuramNeural"
+                            elif "hi-IN-SwaraNeural" in self.available_voices:
+                                self.voice_model = "hi-IN-SwaraNeural"
+                            else:
+                                self.voice_model = "hi-IN-MadhuramNeural"
+                    else:
+                        self.voice_model = "en-US-AriaNeural"
+                        
                     communicate = edge_tts.Communicate(clean, self.voice_model)
                     # Add a 3.0 second timeout for downloading Edge-TTS audio to avoid hanging on slow network
                     asyncio.run(asyncio.wait_for(communicate.save(output_file), timeout=3.0))
@@ -820,9 +886,60 @@ class Voice:
                     self.last_avg_logprob = avg_logprob
                     self.last_no_speech_prob = no_speech_prob
                     
+                    # Language detection normalization
+                    detected_lang_raw = str(res_data.get('language', 'en')).lower().strip()
+                    detected_lang = 'en'
+                    if detected_lang_raw in ('hi', 'hindi'):
+                        detected_lang = 'hi'
+                    elif detected_lang_raw in ('or', 'or-in', 'odia', 'oriya'):
+                        detected_lang = 'or'
+                    
+                    # Regex fallback script checking
+                    if text:
+                        if re.search(r"[\u0900-\u097F]", text):
+                            detected_lang = 'hi'
+                        elif re.search(r"[\u0B00-\u0B7F]", text):
+                            detected_lang = 'or'
+                    
+                    # Convert avg_logprob to probability (exp(avg_logprob))
+                    lang_conf = 1.0
+                    if 'language_probability' in res_data:
+                        lang_conf = float(res_data['language_probability'])
+                    elif avg_logprob is not None:
+                        import math
+                        try:
+                            lang_conf = math.exp(avg_logprob)
+                        except Exception:
+                            lang_conf = 1.0
+
+                    # Force English if transcribed text is purely ASCII (English script) or if language confidence is low
+                    is_ascii = False
+                    if text:
+                        try:
+                            text.encode('ascii')
+                            is_ascii = True
+                        except UnicodeEncodeError:
+                            is_ascii = False
+                            
+                    if is_ascii or lang_conf < 0.80:
+                        detected_lang = 'en'
+                    
+                    # "2 consecutive English turns" lock reset strategy
+                    if detected_lang != 'en':
+                        self.current_language = detected_lang
+                        self.english_turns_count = 0
+                    else:
+                        self.english_turns_count += 1
+                        if self.english_turns_count >= 2:
+                            self.current_language = 'en'
+                    
+                    print(f"[LANG] detected={detected_lang_raw} active={self.current_language} (confidence={lang_conf:.2f}, ascii={is_ascii})")
                     print(f"[Voice/Whisper] avg_logprob: {avg_logprob:.3f}, no_speech_prob: {no_speech_prob:.3f}")
                     if text:
-                        print(f'[STT Whisper]: {text}')
+                        try:
+                            print(f'[STT Whisper]: {text}')
+                        except UnicodeEncodeError:
+                            print(f'[STT Whisper]: {text.encode("ascii", "backslashreplace").decode("ascii")}')
                         return text
                 else:
                     print(f'[Voice/Whisper] Whisper failed {res.status_code}. Falling back to Google STT.')
@@ -830,7 +947,38 @@ class Voice:
                 print(f'[Voice/Whisper] Transcription error: {e}. Falling back to Google STT.')
         try:
             text = self.recognizer.recognize_google(audio_data)
-            print(f'[STT RAW]: {text}')
+            try:
+                print(f'[STT RAW]: {text}')
+            except UnicodeEncodeError:
+                print(f'[STT RAW]: {text.encode("ascii", "backslashreplace").decode("ascii")}')
+            
+            # Apply same language detection/reset logic on fallback text
+            detected_lang = 'en'
+            if text:
+                if re.search(r"[\u0900-\u097F]", text):
+                    detected_lang = 'hi'
+                elif re.search(r"[\u0B00-\u0B7F]", text):
+                    detected_lang = 'or'
+            
+            is_ascii = False
+            if text:
+                try:
+                    text.encode('ascii')
+                    is_ascii = True
+                except UnicodeEncodeError:
+                    is_ascii = False
+            if is_ascii:
+                detected_lang = 'en'
+            
+            if detected_lang != 'en':
+                self.current_language = detected_lang
+                self.english_turns_count = 0
+            else:
+                self.english_turns_count += 1
+                if self.english_turns_count >= 2:
+                    self.current_language = 'en'
+            
+            print(f"[LANG] fallback_detected={detected_lang} active={self.current_language}")
             return text
         except sr.UnknownValueError:
             return ''
@@ -838,7 +986,10 @@ class Voice:
             print(f'[Voice] Google STT API error: {e}')
             try:
                 text = self.recognizer.recognize_sphinx(audio_data)
-                print(f'[STT Offline]: {text}')
+                try:
+                    print(f'[STT Offline]: {text}')
+                except UnicodeEncodeError:
+                    print(f'[STT Offline]: {text.encode("ascii", "backslashreplace").decode("ascii")}')
                 return text
             except:
                 return ''
@@ -877,14 +1028,7 @@ class Voice:
                     else:
                         print("[Voice/ChunkedRecord] Aborted recording because ARIA started speaking.")
                         return None
-                if not active_conversation:
-                    main_mod = __import__('__main__')
-                    aria = getattr(main_mod, 'instance', None) or getattr(main_mod, 'aria_instance', None)
-                    if aria:
-                        is_owner_active = (getattr(aria, 'known_user', None) in ["chinmay", "chinmaya"] and (pytime.time() - getattr(aria, "last_identity_match_time", 0.0) < 180.0))
-                        if is_owner_active:
-                            print("[Voice/ChunkedRecord] Aborted recording because owner became active (bypassing wake word).")
-                            return None
+
 
                 now = pytime.time()
                 if not started_speech:
@@ -988,7 +1132,10 @@ class Voice:
                 return None
             text = self.whisper_transcribe(audio)
             if text:
-                print(f'[User]: {text}')
+                try:
+                    print(f'[User]: {text}')
+                except UnicodeEncodeError:
+                    print(f'[User]: {text.encode("ascii", "backslashreplace").decode("ascii")}')
                 try:
                     def _run_analyzer_async():
                         try:
@@ -1093,6 +1240,26 @@ class Voice:
                 return None
         except Exception as e:
             return None
+
+    def play_audio_file(self, file_path):
+        if not os.path.exists(file_path):
+            print(f"[Voice] Audio file not found: {file_path}")
+            return
+        try:
+            if pygame.mixer.get_init():
+                if pygame.mixer.music.get_busy():
+                    pygame.mixer.music.stop()
+                    try:
+                        pygame.mixer.music.unload()
+                    except Exception:
+                        pass
+                pygame.mixer.music.load(file_path)
+                pygame.mixer.music.play()
+                # Wait for playback to finish
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.05)
+        except Exception as e:
+            print(f"[Voice] Error playing audio file: {e}")
 
     def cleanup(self):
         self._shutting_down = True

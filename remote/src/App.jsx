@@ -672,7 +672,21 @@ export default function App() {
 
   return (
     <>
-      {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
+      {showSplash && (
+        <SplashScreen
+          onComplete={() => {
+            setShowSplash(false);
+            if (window.AndroidInterface && typeof window.AndroidInterface.onSplashCompleted === "function") {
+              try {
+                window.AndroidInterface.onSplashCompleted();
+              } catch (e) {
+                console.error("Failed to notify Android splash completed:", e);
+              }
+            }
+          }}
+        />
+      )}
+
       
       {/* Top Bar */}
       <div className="topbar">

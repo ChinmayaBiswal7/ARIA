@@ -44,16 +44,15 @@ class AriaDecisionEngine:
                 "score": 0.0
             }
 
-        # Ingest Life OS pressures
+        # Ingest Life OS pressures and unified Life States
+        life_state = "NORMAL"
         try:
             from skills.personal_os_reasoning import PersonalOSReasoningEngine
             pos_engine = PersonalOSReasoningEngine(db_path=self.db_path)
             pressures = pos_engine.compute_systemic_pressures()
-            is_academic_guard = "ACADEMIC_GUARD" in pressures["active_guards"]
-            is_burnout_guard = "BURNOUT_PROTECTION" in pressures["active_guards"]
+            life_state = pressures.get("life_state", "NORMAL")
         except Exception:
-            is_academic_guard = False
-            is_burnout_guard = False
+            pass
 
         scored_tasks = []
 
@@ -122,14 +121,22 @@ class AriaDecisionEngine:
                 if is_blocking:
                     roi_score *= 1.5  # Bottleneck multiplier
 
-                # Phase 6D: Life Intelligence Adjustments
-                if is_academic_guard:
-                    if name.lower() == "academics" or "dsa" in task_name.lower() or "study" in task_name.lower():
+                # Phase 6D & Sprint P22: Life Intelligence Adjustments based on unified Life State Machine
+                if life_state == "EXAM_MODE":
+                    if name.lower() == "academics" or any(k in task_name.lower() for k in ["study", "exam", "dsa", "leetcode", "dbms", "notes"]):
+                        roi_score *= 4.0
+                    else:
+                        roi_score *= 0.1
+                elif life_state == "FOCUS_MODE":
+                    if name.lower() == "academics" or any(k in task_name.lower() for k in ["study", "exam", "dsa", "leetcode", "dbms", "notes"]):
                         roi_score *= 2.5
                     else:
                         roi_score *= 0.3
-                if is_burnout_guard and effort > 3:
-                    roi_score *= 0.4
+                elif life_state in ("BURNOUT_RISK_MODE", "RECOVERY_MODE"):
+                    if effort > 1.5:
+                        roi_score *= 0.2  # Suppress heavy tasks during fatigue
+                    if effort <= 0.5:
+                        roi_score *= 2.0  # Boost small quick wins to maintain light forward momentum
 
                 scored_tasks.append({
                     "project": name,

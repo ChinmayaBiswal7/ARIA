@@ -51,6 +51,7 @@ class Brain:
     def __init__(self):
         self.custom_commands_path = "custom_commands.json"
         self.chat_history = []  # Conversation memory
+        self.current_language = "en"
 
         self.ollama_ready  = False
         self.vision_ready  = False
@@ -121,6 +122,15 @@ class Brain:
             print(f"[Brain] Vision model offline. Run: ollama pull {VISION_MODEL}")
             
         self._sync_registry_status()
+
+        # Initialize the Vertex AI Unified Bridge
+        try:
+            from skills.vertex_bridge import AriaVertexBridge
+            self.vertex_bridge = AriaVertexBridge()
+            print("[Brain] Vertex AI Unified Bridge initialized successfully.")
+        except Exception as e:
+            self.vertex_bridge = None
+            print(f"[Brain] Could not initialize Vertex AI Unified Bridge: {e}")
 
         # Phase 4B: Start git commit watcher (daemon, non-blocking)
         try:
@@ -234,7 +244,7 @@ class Brain:
         
         full_message = self._build_message(user_input, user_name)
         
-        messages = [{"role": "system", "content": self._build_system_prompt(user_name, user_similarity, user_confidence, emotional_tone)}]
+        messages = [{"role": "system", "content": self._build_system_prompt(user_name, user_similarity, user_confidence, emotional_tone, query=user_input)}]
         # Pull up to 6 clean history messages (excluding the current turn)
         for msg in self.chat_history[-7:-1]:
             messages.append({"role": msg["role"], "content": msg["content"]})
@@ -304,7 +314,7 @@ class Brain:
         
         full_message = self._build_message(user_input, user_name)
         
-        messages = [{"role": "system", "content": self._build_system_prompt(user_name, user_similarity, user_confidence, emotional_tone)}]
+        messages = [{"role": "system", "content": self._build_system_prompt(user_name, user_similarity, user_confidence, emotional_tone, query=user_input)}]
         for msg in self.chat_history[-7:-1]:
             messages.append({"role": msg["role"], "content": msg["content"]})
         messages.append({"role": "user", "content": full_message})
@@ -484,7 +494,7 @@ class Brain:
         except Exception as e:
             print(f"[Brain] Cannot reach Ollama server: {e}")
 
-    def _get_sqlite_context(self, user_name=None, current_task=None):
+    def _get_sqlite_context(self, user_name=None, current_task=None, query=None):
         import sqlite3
         from skills.memory_skill import MemorySkill
         from skills.health_skill import HealthSkill
@@ -508,6 +518,7 @@ class Brain:
         explore_str = ""
         skill_trust_str = ""
         relationship_str = ""
+        session_summary_str = ""
 
         try:
             conn = sqlite3.connect(db_path)
@@ -660,7 +671,7 @@ class Brain:
             # 13. Fetch Causal Policy Adaptation rules
             causal_remedy_str = ""
             try:
-                from skills.causal_adaptation import CausalAdaptationEngine
+                from skills.causal_attribution import CausalAdaptationEngine
                 remedy = CausalAdaptationEngine().get_adaptation_remediations()
                 if remedy:
                     causal_remedy_str = (
@@ -733,6 +744,22 @@ class Brain:
             except Exception as e:
                 print(f"[Brain/Health] Error loading health context: {e}")
 
+            # Fetch last session summary
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS session_summaries (
+                        username TEXT PRIMARY KEY,
+                        summary TEXT,
+                        updated_at REAL
+                    )
+                """)
+                cursor.execute("SELECT summary FROM session_summaries WHERE username = ?", (user_name_clean,))
+                session_row = cursor.fetchone()
+                if session_row and session_row["summary"]:
+                    session_summary_str = f"== LAST SESSION SUMMARY ==\n{session_row['summary']}"
+            except Exception as ss_err:
+                print(f"[Brain/SessionSummary] Error loading last session summary: {ss_err}")
+
             conn.close()
 
             # Load active projects from aria_projects.json
@@ -790,8 +817,21 @@ class Brain:
                     kb_graph_str = "\n".join(kb_lines)
             except Exception as kg_err:
                 print(f"[Brain/KBGraph] Error loading knowledge graph: {kg_err}")
-            
+                
+            # Load relevant profile context from new Personal Knowledge Graph
+            kg_profile_str = ""
+            try:
+                from skills.knowledge_graph import KnowledgeGraph
+                kg_profile_str = KnowledgeGraph().retrieve_relevant_profile(query)
+            except Exception as kg_err2:
+                print(f"[Brain/KnowledgeGraph] Error retrieving relevant profile context: {kg_err2}")
+            # Last session summary is loaded above within the database connection block
+
             context_parts = []
+            if session_summary_str:
+                context_parts.append(session_summary_str)
+            if kg_profile_str:
+                context_parts.append(f"== PERSONAL PROFILE ==\n{kg_profile_str}")
             if projects_str:
                 context_parts.append(f"== ACTIVE PROJECTS & GOALS ==\n{projects_str}")
             if kb_graph_str:
@@ -1117,7 +1157,7 @@ class Brain:
         }
         return emotion_map.get(emotion, emotion_map["neutral"])
 
-    def _build_system_prompt(self, user_name=None, user_similarity=0.0, user_confidence="none", emotional_tone="neutral"):
+    def _build_system_prompt(self, user_name=None, user_similarity=0.0, user_confidence="none", emotional_tone="neutral", query=None):
         now = datetime.datetime.now()
         emotional_context = self._build_emotional_context(emotional_tone)
         
@@ -1126,7 +1166,7 @@ class Brain:
         if user_name and user_name != "Unknown" and user_confidence in ["high", "medium"]:
             active_user = user_name
             
-        sql_context = self._get_sqlite_context(user_name=active_user)
+        sql_context = self._get_sqlite_context(user_name=active_user, query=query)
         browser_context = self._get_browser_context_str()
         
         prompt_str = f"""You are ARIA, a smart AI desktop assistant and personal companion running on Windows.
@@ -1138,6 +1178,12 @@ TONE INSTRUCTIONS: {emotional_context['instructions']}
 
 Always adapt your response naturally to match the user's emotional state.
 Never mention that you are adapting your tone.
+
+== MULTI-LANGUAGE RESPONSE PARADIGM ==
+You must respond only in { {"en": "English", "hi": "Hindi", "or": "Odia"}.get(getattr(self, "current_language", "en"), "English") }.
+Do not translate.
+Do not switch languages.
+Use natural conversational { {"en": "English", "hi": "Hindi", "or": "Odia"}.get(getattr(self, "current_language", "en"), "English") }.
 
 """
         if active_user != "guest":
@@ -1377,7 +1423,7 @@ To open VS Code project:    [VSCODE_OPEN: path]
 
         model = genai.GenerativeModel(
             model_name=model_name,
-            system_instruction=self._build_system_prompt(user_name, user_similarity, user_confidence, emotional_tone)
+            system_instruction=self._build_system_prompt(user_name, user_similarity, user_confidence, emotional_tone, query=user_input)
         )
 
         if image:
@@ -1766,8 +1812,19 @@ To open VS Code project:    [VSCODE_OPEN: path]
         except Exception:
             pass
 
-        internal_search_summary = isinstance(user_input, str) and user_input.lstrip().startswith("The user asked:")
-        if browser_active and not internal_search_summary:
+        is_internal = False
+        if isinstance(user_input, str):
+            inp_strip = user_input.lstrip()
+            if (inp_strip.startswith("The user asked:") or 
+                inp_strip.startswith("You are the Agent Coordinator") or
+                inp_strip.startswith("You are the central Cognitive Planner") or
+                inp_strip.startswith("You are ARIA's Career") or
+                "You are the executive planning core of ARIA" in inp_strip or
+                "Decompose the user's multi-action goal" in inp_strip or
+                (len(inp_strip) > 300 and ("you must output" in inp_strip.lower() or "json" in inp_strip.lower() or "you are the" in inp_strip.lower()))):
+                is_internal = True
+
+        if browser_active and not is_internal:
             q_lower = user_input.lower().strip()
             question_words = ["what", "how", "why", "who", "where", "which", "explain", "tell me", "show me", "describe", "summarize", "read"]
             is_question = any(q_lower.startswith(qw) for qw in question_words)
@@ -1827,7 +1884,7 @@ To open VS Code project:    [VSCODE_OPEN: path]
 
         # ── SEMANTIC ROUTING (NEW) ────────────────────────────────────────────
         routing_decision = getattr(self, "_current_routing_decision", None)
-        if not routing_decision and self.semantic_router and not internal_search_summary:
+        if not routing_decision and self.semantic_router and not is_internal:
             try:
                 # Only skip repair if we are deep in recursion (to prevent infinite loops)
                 skip_repair = (repair_depth > 2)
@@ -2196,8 +2253,11 @@ To open VS Code project:    [VSCODE_OPEN: path]
                 except Exception as e:
                     latency = _time.time() - start_time
                     err_str = str(e)
-                    print(f"[Brain/Registry] Attempt {attempts} with {model_name} failed in {latency:.2f}s: {err_str[:120]}")
-                    is_quota = "429" in err_str or "quota" in err_str.lower() or "too many requests" in err_str.lower()
+                    is_quota = "429" in err_str or "quota" in err_str.lower() or "too many requests" in err_str.lower() or "ResourceExhausted" in err_str
+                    if is_quota:
+                        print(f"[Brain/Registry] Model '{model_name}' hit quota/rate limit. Transitioning to fallback models...")
+                    else:
+                        print(f"[Brain/Registry] Attempt {attempts} with {model_name} failed in {latency:.2f}s: {err_str[:120]}")
                     self.model_registry.record_failure(model_name, is_quota_error=is_quota)
             
             print("[ModelRegistry] All model registry routes failed. Falling back to offline local parser.")
@@ -2329,6 +2389,38 @@ To open VS Code project:    [VSCODE_OPEN: path]
 
         return "I'm ready. Tell me what to open, search, or automate."
 
+    def think_vertex(self, prompt, system_instruction=None, enforce_json_schema=None, model_type="flash"):
+        """Routes cognitive queries straight to Google Cloud Vertex AI with a multi-level fallback chain."""
+        if getattr(self, "vertex_bridge", None):
+            return self.vertex_bridge.generate(
+                prompt=prompt,
+                system_instruction=system_instruction,
+                enforce_json_schema=enforce_json_schema,
+                model_type=model_type,
+                brain_instance=self
+            )
+        else:
+            return self.think_raw(prompt, system_instruction)
+
+    def think_local(self, prompt, system_instruction=None):
+        """Forces purely localized execution (local Ollama model or offline rules)."""
+        if self.ollama_ready:
+            try:
+                import ollama as _ollama
+                messages = []
+                if system_instruction:
+                    messages.append({"role": "system", "content": system_instruction})
+                messages.append({"role": "user", "content": prompt})
+                response = _ollama.chat(
+                    model=OLLAMA_MODEL,
+                    messages=messages,
+                    options={"temperature": 0.1}
+                )
+                return response["message"]["content"].strip()
+            except Exception as e:
+                print(f"[Brain/Local] Local Ollama error: {e}")
+        return self._offline_think(prompt)
+
     def think_raw(self, prompt, system_instruction=None):
         """Executes a raw prompt directly on the best available backend without history or system prompt wrappers."""
         import time as _time
@@ -2347,7 +2439,12 @@ To open VS Code project:    [VSCODE_OPEN: path]
                 print(f"[Brain/Raw-Gemini] Response received.")
                 return res_text
             except Exception as e:
-                print(f"[Brain/Raw] Gemini error: {e}")
+                _err_str = str(e)
+                _is_quota = "429" in _err_str or "quota" in _err_str.lower() or "ResourceExhausted" in _err_str
+                if _is_quota:
+                    print(f"[Brain/Raw] Gemini quota hit – switching to Groq/Ollama fallback.")
+                else:
+                    print(f"[Brain/Raw] Gemini error: {_err_str[:180]}")
 
         # 2. Try Groq
         if self.internet_ready and self.groq_ready:

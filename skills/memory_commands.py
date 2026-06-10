@@ -126,8 +126,46 @@ def handle_folders_whatsapp(aria, inp, user_input):
     return "no_matching_folders_whatsapp_action"
 
 
+def get_system_stats():
+    import psutil
+    try:
+        cpu = psutil.cpu_percent(interval=0.5)
+        ram = psutil.virtual_memory()
+        ram_used = ram.percent
+        ram_used_gb = ram.used / (1024 ** 3)
+        ram_total_gb = ram.total / (1024 ** 3)
+        disk = psutil.disk_usage('/')
+        disk_used = disk.percent
+        disk_free_gb = disk.free / (1024 ** 3)
+
+        # Battery (not all systems have it)
+        battery_str = ""
+        battery = psutil.sensors_battery()
+        if battery:
+            charging = "charging" if battery.power_plugged else "not charging"
+            battery_str = (
+                f"Battery is at {int(battery.percent)}% and {charging}. "
+            )
+
+        result = (
+            f"CPU usage is {cpu}%. "
+            f"RAM usage is {ram_used}%, "
+            f"that's {ram_used_gb:.1f} of {ram_total_gb:.1f} gigabytes used. "
+            f"Disk usage is {disk_used}%, "
+            f"{disk_free_gb:.1f} gigabytes free. "
+            f"{battery_str}"
+        )
+
+        print(f"[SystemStats] {result}")
+        return result.strip()
+
+    except Exception as e:
+        print(f"[SystemStats] Error: {repr(e)}")
+        return "Sorry, I could not retrieve system stats."
+
+
 def handle_personal_notes_pc_status(aria, inp, user_input):
-    from skills.command_patterns import PERSONAL_BRAIN_WORDS, GUIDE_ME_WORDS
+    from skills.command_patterns import PERSONAL_BRAIN_WORDS, GUIDE_ME_WORDS, LAST_SESSION_WORDS
     if any(x in inp for x in PERSONAL_BRAIN_WORDS):
         aria._speak(aria.memory_skill.get_personal_brain_summary())
         return "retrieved_personal_brain_summary"
@@ -201,6 +239,41 @@ def handle_personal_notes_pc_status(aria, inp, user_input):
         else:
             aria._speak("I couldn't read the battery level. If this is a desktop, it might not have one.")
             return "checked_battery_unavailable"
+
+    if re.search(
+        r"(cpu|ram|memory|battery|system|disk).*(usage|status|stats|percent|level|info|how much)",
+        user_input.lower()
+    ) or re.search(
+        r"(how (much|many)|what).*(cpu|ram|memory|battery|disk)",
+        user_input.lower()
+    ):
+        stats = get_system_stats()
+        aria._speak(stats)
+        return "read_system_stats"
+
+    if any(x in inp for x in LAST_SESSION_WORDS):
+        import sqlite3
+        user_clean = (aria.known_user or "chinmaya").lower().strip()
+        conn = sqlite3.connect("aria_memory.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                username TEXT PRIMARY KEY,
+                summary TEXT,
+                updated_at REAL
+            )
+        """)
+        conn.commit()
+        cursor.execute("SELECT summary FROM session_summaries WHERE username = ?", (user_clean,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row["summary"]:
+            aria._speak(f"Here is a summary of our last session: {row['summary']}")
+            return "read_last_session_summary"
+        else:
+            aria._speak("I don't have a summary for our last session yet.")
+            return "read_last_session_summary_empty"
 
     return "no_matching_personal_notes_action"
 

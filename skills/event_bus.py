@@ -47,6 +47,7 @@ class ARIAEvents:
 
     # User signals
     USER_INTERRUPT = "USER_INTERRUPT"
+    WINDOW_CHANGED = "WINDOW_CHANGED"
 
     @staticmethod
     def build_payload(

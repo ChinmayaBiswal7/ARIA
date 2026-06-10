@@ -305,8 +305,30 @@ class AgentPlanner:
         page_text: str,
         page_elements_summary: str,
     ) -> str:
+        # Wave 2 Skill Trust Routing Integration
+        trust_warnings = ""
+        try:
+            from skills.intelligence_convergence_hub import AriaIntelligenceConvergenceHub
+            hub = AriaIntelligenceConvergenceHub()
+            overrides = hub.generate_convergence_overrides()
+            penalties = overrides.get("skill_routing_penalties", {})
+            avoid_skills = overrides.get("avoid_skills", [])
+            
+            lines = []
+            if avoid_skills:
+                lines.append("== ACTIVE ROUTING PENALTY WARNINGS ==")
+                for skill in avoid_skills:
+                    penalty = penalties.get(skill, "Penalized")
+                    lines.append(f"- Action/Skill '{skill}': Status [{penalty}]. Avoid using if alternative paths exist.")
+                lines.append("If browser actions keep failing, consider using 'finish' to suggest a command-line fallback or manual intervention.")
+                lines.append("")
+                trust_warnings = "\n".join(lines)
+        except Exception as e:
+            print(f"[AgentPlanner] Error loading trust warning overrides: {e}")
+
         return (
             f"You are the executive planning core of ARIA. Your high-level goal is: '{goal}'\n\n"
+            f"{trust_warnings}"
             f"Current Step: {current_step}/{self.max_steps}\n"
             f"Current URL: {current_url}\n"
             f"Last Action Observation: {last_observation}\n\n"

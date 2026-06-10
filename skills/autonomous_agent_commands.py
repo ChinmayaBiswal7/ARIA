@@ -444,10 +444,78 @@ def verify_action(aria, action_tag, sw, sh):
         action_id = str(uuid.uuid4())
         if not aria.sandbox_safety.is_action_approved(action_id, risk_level):
             from dashboard import set_state
-            aria._speak(f"Warning. Proposing {risk_level} risk action: {action_tag}. Please say 'yes' to approve or 'no' to abort.")
+            
+            # Write to Firestore approvals/latest
+            db = None
+            try:
+                import firebase_admin
+                from firebase_admin import firestore
+                if firebase_admin._apps:
+                    db = firestore.client()
+                    db.collection("approvals").document("latest").set({
+                        "action_id": action_id,
+                        "action_tag": action_tag,
+                        "description": f"ARIA wants to: {action_tag}",
+                        "risk_level": risk_level,
+                        "status": "pending",
+                        "timestamp": time.time()
+                    })
+            except Exception as e:
+                print(f"[ApprovalSync] Failed to write approval request: {e}")
+
+            # Send FCM push notification to Android device
+            try:
+                from skills.firebase_sync import send_fcm_approval_push
+                send_fcm_approval_push(
+                    action_tag=action_tag,
+                    risk_level=risk_level,
+                    description=f"ARIA wants to: {action_tag}"
+                )
+            except Exception as fcm_err:
+                print(f"[ApprovalSync] FCM push failed (non-fatal): {fcm_err}")
+
+            aria._speak(f"Warning. Proposing {risk_level} risk action: {action_tag}. Please approve on your phone or say yes.")
             set_state("LISTENING")
-            feedback = aria.voice.listen(timeout=8)
+            feedback = aria.voice.listen(timeout=6)
+            
+            approved = False
+            aborted = False
+            
+            # Check voice feedback
             if feedback and any(x in feedback.lower() for x in ["yes", "approve", "go ahead", "sure", "ok", "okay"]):
+                approved = True
+            elif feedback and any(x in feedback.lower() for x in ["no", "abort", "reject", "cancel"]):
+                aborted = True
+            
+            # Check Firestore if not decided by voice
+            if not approved and not aborted and db:
+                print("[ApprovalSync] Checking Firestore for remote approval...")
+                for _ in range(15):
+                    try:
+                        doc = db.collection("approvals").document("latest").get()
+                        if doc.exists:
+                            status = doc.to_dict().get("status", "pending")
+                            if status == "approved":
+                                approved = True
+                                break
+                            elif status == "rejected":
+                                aborted = True
+                                break
+                    except Exception as e:
+                        print(f"[ApprovalSync] Error reading approvals: {e}")
+                    time.sleep(1.0)
+            
+            # Update Firestore to reflect the final decision and clean up
+            if db:
+                try:
+                    db.collection("approvals").document("latest").update({
+                        "status": "approved" if approved else "rejected" if aborted else "timeout",
+                        "decided_at": time.time()
+                    })
+                except Exception:
+                    pass
+
+            if approved:
                 aria.sandbox_safety.grant_approval(action_id)
                 aria._speak("Action approved.")
             else:

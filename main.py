@@ -46,6 +46,10 @@ from skills.context_budget import ContextBudgetManager
 from skills.reflection_engine import ReflectionEngine
 from skills.proactive_cognition import ProactiveCognition
 from skills.episodic_memory import EpisodicMemory
+from skills.knowledge_graph import KnowledgeGraph
+from skills.life_learner import LifeLearner
+from skills.agent_orchestrator import AriaMultiAgentOrchestrator
+from skills.blackboard import AriaBlackboard
 
 # New modular commands
 import skills.voice_session_commands
@@ -204,6 +208,13 @@ class ARIA:
         self.ar_mode = False
         self._dismissed_goals = set()  # Goals dismissed this session — never re-surface
         self.image_gen_mode = False
+        self.wake_sentinel = None
+        self.wake_sentinel_thread = None
+        self.db_path = "aria_memory.db"
+        from skills.security_monitor import SecurityMonitor
+        self.security_monitor = SecurityMonitor(aria=self, db_path=self.db_path)
+        self.knowledge_graph = KnowledgeGraph()
+        self.life_learner = LifeLearner(knowledge_graph=self.knowledge_graph, aria=self)
 
     def initialize(self):
         print("\n" + "="*50)
@@ -336,6 +347,8 @@ class ARIA:
         self.reflection_engine = ReflectionEngine()
         self.proactive_cognition = ProactiveCognition()
         self.episodic_memory = EpisodicMemory()
+        self.orchestrator = AriaMultiAgentOrchestrator(self)
+        self.blackboard = AriaBlackboard()
 
         # Start Background Task Executor Queue Worker
         threading.Thread(target=skills.proactive_scheduler_commands.executor_queue_worker, args=(self,), daemon=True).start()
@@ -408,6 +421,12 @@ class ARIA:
             print("[ARIA] Window-Monitor background loop successfully running.")
         except Exception as wme:
             print(f"[ARIA] Could not start window monitor loop: {wme}")
+
+        # Start Autonomous Background Learner Thread
+        try:
+            self.life_learner.start()
+        except Exception as lle:
+            print(f"[ARIA] Could not start autonomous life learner: {lle}")
         
         # Check for unfinished sessions and prompt to Resume
         try:
@@ -442,6 +461,39 @@ class ARIA:
             print(f"[ARIA Session] Checkpoint check failed: {e}")
         mode_str = "Always-On" if self.wake_mode else "Wake-Word"
         print(f"[ARIA] All systems ready. Mode: {mode_str}\n")
+
+        # Check for pending unsent drafts in SQLite queue and notify the user
+        try:
+            from skills.email_skill import AriaEmailSkill
+            email_skill = AriaEmailSkill()
+            pending_drafts = email_skill.get_all_pending_drafts()
+            if pending_drafts:
+                count = len(pending_drafts)
+                if count == 1:
+                    self._speak("Welcome back! You have 1 pending email draft waiting for approval.")
+                else:
+                    self._speak(f"Welcome back! You have {count} pending email drafts waiting for approval.")
+        except Exception as e:
+            print(f"[ARIA Email Startup] Failed to check pending drafts: {e}")
+
+        # Trigger delayed memory maintenance pass
+        try:
+            def run_startup_maintenance():
+                time.sleep(60)
+                print("[MemoryMaintenance] Running startup memory maintenance...")
+                try:
+                    username = self.known_user or "chinmaya"
+                    self.episodic_memory.decay_pass(username)
+                    print("[MemoryMaintenance] Decay pass complete.")
+                    self.episodic_memory.compress_old_episodes(username)
+                    print("[MemoryMaintenance] Startup maintenance complete.")
+                except Exception as e:
+                    print(f"[MemoryMaintenance] Startup error: {repr(e)}")
+
+            maintenance_thread = threading.Thread(target=run_startup_maintenance, name="ARIA-StartupMemoryMaintenance", daemon=True)
+            maintenance_thread.start()
+        except Exception as me:
+            print(f"[MemoryMaintenance] Could not start startup memory maintenance: {me}")
 
         # Print health summary after all subsystems initialized
         _failed = HEALTH.get_failed()
@@ -939,6 +991,7 @@ class ARIA:
                         import cv2
                         gray = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
                         faces = self.memory.face_cascade.detectMultiScale(gray, 1.1, 4)
+                        detected = None
                         if len(faces) > 0:
                             # Try to identify the user
                             detected = self.identify_user()
@@ -960,6 +1013,20 @@ class ARIA:
                                         self._speak("Welcome back, Chinmaya.", allow_barge_in=False)
                                     else:
                                         print(f"[PresenceEngine] Owner '{detected}' detected by camera. Silent wake-up / match refreshed.")
+                        
+                        # Invoke security monitor frame processing
+                        if hasattr(self, "security_monitor") and self.security_monitor is not None:
+                            try:
+                                owner_present = (self.known_user in ["chinmay", "chinmaya"] and (time.time() - self.owner_last_seen_time < 180.0))
+                                identified_user_passed = detected if detected in ["chinmay", "chinmaya"] else None
+                                self.security_monitor.process_frame(
+                                    frame=arr if len(faces) > 0 else None,
+                                    identified_user=identified_user_passed,
+                                    similarity=self.known_user_similarity,
+                                    owner_present=owner_present
+                                )
+                            except Exception as sec_err:
+                                print(f"[PresenceEngine] SecurityMonitor process_frame error: {sec_err}")
             except Exception as e:
                 print(f"[PresenceEngine] Error in face wake loop: {e}")
             time.sleep(2.0)
@@ -1112,9 +1179,18 @@ class ARIA:
     def _run_window_monitor_loop(self):
         """Monitors the active window and triggers proactive reminders for projects after dwell time."""
         print("[WindowMonitor] Continuous awareness loop started.")
+        from skills.proactive_governor import AriaProactiveGovernor
+        governor = AriaProactiveGovernor(self.db_path)
         cooldowns = {}  # project_name -> timestamp of last voice alert
         focus_start_times = {}  # project_name -> timestamp when window focus started
         alerted_this_focus = {}  # project_name -> bool
+
+        from skills.context_skill import AriaDesktopPerceptionService, WindowEvent
+        from skills.event_bus import EventBus, ARIAEvents
+        from skills.active_context import ActiveContext
+        from ui_control import capture_desktop_perception_snapshot
+        
+        perception_service = AriaDesktopPerceptionService(self, self.db_path)
 
         while self.running:
             try:
@@ -1132,12 +1208,41 @@ class ARIA:
                 if not active_projects:
                     continue
 
-                # Get the title of the active window on screen
-                current_window = self.context_skill.get_active_window()
+                # Get the detailed info of the active window on screen
+                pid, process_name, current_window = self.context_skill.get_active_window_info()
                 if not current_window:
                     focus_start_times.clear()
                     alerted_this_focus.clear()
                     continue
+
+                # Get the WindowEvent with UIA tree snapshot if whitelisted
+                event = capture_desktop_perception_snapshot(pid, process_name, current_window)
+
+                # Feed event to perception service (which debounces, tracks focus duration, and caches)
+                is_processed = perception_service.process_window_focus_event(event)
+
+                if is_processed:
+                    # Publish event to EventBus
+                    payload = ARIAEvents.build_payload(
+                        extra={
+                            "window_title": current_window,
+                            "process_name": process_name,
+                            "pid": pid,
+                            "timestamp": time.time(),
+                            "source": "DesktopPerceptionService"
+                        }
+                    )
+                    EventBus().publish(ARIAEvents.WINDOW_CHANGED, payload)
+                    
+                    # Update ActiveContext state
+                    ActiveContext().active_window = current_window
+                    ActiveContext().active_file = None
+
+                # Execute governor context evaluation check
+                try:
+                    governor.evaluate_context(self, current_window)
+                except Exception as gov_err:
+                    print(f"[WindowMonitor] Governor check error: {gov_err}")
                 
                 matched_proj_name = None
                 matched_tool = None
@@ -1583,6 +1688,7 @@ class ARIA:
 
     def _handle_input(self, user_input, image=None, remote=False):
         """Process one utterance from the user."""
+        self.assistant_replied = True
         # Security authorization check for local inputs (microphone speech / console typing)
         if not remote:
             now = time.time()
@@ -1712,6 +1818,70 @@ class ARIA:
             except Exception as norm_err:
                 pass  # Normalization is a best-effort enhancement; fall back to raw inp
 
+        # Extract facts from voice declarations dynamically
+        if hasattr(self, 'life_learner') and self.life_learner:
+            try:
+                self.life_learner.learn_from_voice(user_input)
+            except Exception as ll_err:
+                print(f"[ARIA] Error extracting facts from voice: {ll_err}")
+
+        # Personal profile queries routing
+        if any(trigger in inp for trigger in ["what do you know about me", "tell me about myself", "summarize my profile", "show my profile summary"]):
+            summary = self.knowledge_graph.query_profile_summary()
+            reply = f"Here is what I know about you:\n{summary}"
+            self._speak(reply)
+            self.chat_history.append({"role": "user", "content": user_input})
+            self.chat_history.append({"role": "assistant", "content": reply})
+            return
+
+        if inp in ["my skills", "show my skills", "what are my skills"]:
+            skills = self.knowledge_graph.get_nodes_by_type("skill")
+            if skills:
+                names = [f"{s['name']} ({s['status']})" for s in skills[:10]]
+                reply = f"Your top skills include: {', '.join(names)}."
+            else:
+                reply = "I don't have any skills recorded for you yet."
+            self._speak(reply)
+            self.chat_history.append({"role": "user", "content": user_input})
+            self.chat_history.append({"role": "assistant", "content": reply})
+            return
+
+        if inp in ["my goals", "what are my goals", "show my goals"]:
+            goals = self.knowledge_graph.get_nodes_by_type("goal")
+            if goals:
+                names = [g['name'] for g in goals]
+                reply = f"Your recorded goals are: {', '.join(names)}."
+            else:
+                reply = "I don't have any goals recorded for you yet."
+            self._speak(reply)
+            self.chat_history.append({"role": "user", "content": user_input})
+            self.chat_history.append({"role": "assistant", "content": reply})
+            return
+
+        # Project recommendation queries routing
+        rec_match = re.search(r"(?:best project for|recommend a project for|suggest a project for|project recommendation for)\s+([a-z0-9\+\#\s]+)", inp)
+        if rec_match:
+            topic = rec_match.group(1).strip()
+            scored = self.knowledge_graph.find_relevant_projects(topic)
+            if scored:
+                top = scored[0]
+                reasons_str = " ".join(top["reasons"])
+                reply = f"I recommend working on '{top['name']}'. Score: {top['score']:.1f}. Reason: {reasons_str}."
+            else:
+                reply = f"I couldn't find any projects matching '{topic}' in your knowledge graph."
+            self._speak(reply)
+            self.chat_history.append({"role": "user", "content": user_input})
+            self.chat_history.append({"role": "assistant", "content": reply})
+            return
+
+        # Security check-in command routing
+        if any(trigger in inp for trigger in ["who is at my computer", "who is at my pc", "live check-in", "check-in"]):
+            if hasattr(self, "security_monitor") and self.security_monitor is not None:
+                threading.Thread(target=self.security_monitor.handle_remote_check_in, daemon=True).start()
+                if hasattr(self, "firebase_sync") and self.firebase_sync is not None:
+                    self.firebase_sync.update_status("Triggering remote live check-in...", status_str="thinking")
+                return "Security check-in triggered."
+
         # Update relationship metrics based on specific user feedback loops
         if getattr(self, "known_user", None):
             has_thanks = any(w in inp for w in ["thank you", "thanks"])
@@ -1755,6 +1925,14 @@ class ARIA:
             except Exception as e:
                 print(f"[Main] Proactive feedback routing error: {e}")
             self.last_proactive_suggestion_time = 0.0
+
+        if time.time() - getattr(self, "_last_proactive_warning_time", 0.0) < 30.0:
+            try:
+                from skills.proactive_governor import AriaProactiveGovernor
+                AriaProactiveGovernor(self.db_path).log_feedback(user_input)
+            except Exception as e:
+                print(f"[Main] Governor feedback routing error: {e}")
+            self._last_proactive_warning_time = 0.0
 
         # Watchdog and Stale Session validation
         if self.automation_mode:
@@ -1804,9 +1982,72 @@ class ARIA:
         # ───────────────────────────────────────────────────
 
         # Route through modular dispatcher
-        from skills.command_router import handle_system, handle_ar, handle_browser, handle_identity, handle_memory, handle_chief_of_staff
+        from skills.command_router import (
+            handle_system, handle_ar, handle_browser, handle_identity, 
+            handle_memory, handle_chief_of_staff, handle_email,
+            handle_screen_triage_wrapper, handle_cognitive_planning,
+            handle_career, handle_orchestration, handle_missions,
+            handle_vision, handle_rag_search, handle_code_search,
+            handle_architecture_query, handle_research_query, handle_task_planning,
+            handle_gesture_monitoring, handle_personal_coach, handle_self_improvement,
+            handle_desktop_control, handle_chrome_cdp
+        )
 
         image_param = image
+        
+        # Intercept RAG search queries
+        res = handle_rag_search(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        # Intercept codebase searches (Code RAG)
+        res = handle_code_search(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        # Intercept system architecture queries (dependency graph RAG)
+        res = handle_architecture_query(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        # Intercept deep research queries
+        res = handle_research_query(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        # Intercept task planning queries
+        res = handle_task_planning(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        # Intercept gesture monitoring queries
+        res = handle_gesture_monitoring(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+
+
+        # Intercept screen triage confirmations and triggers
+        res = handle_screen_triage_wrapper(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+            
+        res = handle_cognitive_planning(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        res = handle_vision(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        res = handle_orchestration(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
+        res = handle_missions(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+
         res = handle_system(self, inp, user_input, image=image_param)
         if res.get("handled"):
             return
@@ -1820,6 +2061,24 @@ class ARIA:
         if res.get("handled"):
             return
         res = handle_memory(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_email(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_career(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_personal_coach(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_self_improvement(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_desktop_control(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_chrome_cdp(self, inp, user_input, image=image_param)
         if res.get("handled"):
             return
         res = handle_chief_of_staff(self, inp, user_input, image=image_param)
@@ -1926,6 +2185,8 @@ class ARIA:
                 self._speak(clean, source=source)
 
         self.brain._stream_callback = _on_streamed_sentence
+        if hasattr(self, 'brain') and self.brain and hasattr(self, 'voice') and self.voice:
+            self.brain.current_language = getattr(self.voice, "current_language", "en")
 
         response = self.brain.think(
             user_input,
@@ -2082,7 +2343,34 @@ class ARIA:
                 self._speak("Gesture wake detected.")
                 self._mark_conversation_activity(wake_reason="gesture_wake")
             elif event == "GESTURE_CONFIRM":
-                self._speak("Confirmed.")
+                # Check for a pending email draft waiting for approval
+                from skills.email_skill import AriaEmailSkill
+                email_skill = AriaEmailSkill()
+                draft = email_skill.get_latest_pending_draft()
+                if draft:
+                    self._speak(f"Sending email to {draft['to_email']} now...")
+                    res = email_skill.execute_send(draft["id"], approved_by="gesture")
+                    if res == "SUCCESS":
+                        self._speak("Email sent successfully!")
+                        if hasattr(self, "_pending_email_draft_id"):
+                            self._pending_email_draft_id = None
+                    else:
+                        self._speak(f"Failed to send email. {res}")
+                else:
+                    self._speak("Confirmed.")
+            elif event == "GESTURE_CANCEL":
+                self.automation_mode = False
+                # Check for a pending email draft waiting for approval
+                from skills.email_skill import AriaEmailSkill
+                email_skill = AriaEmailSkill()
+                draft = email_skill.get_latest_pending_draft()
+                if draft:
+                    email_skill.cancel_draft(draft["id"])
+                    self._speak("Email draft cancelled and cleared.")
+                    if hasattr(self, "_pending_email_draft_id"):
+                        self._pending_email_draft_id = None
+                else:
+                    self._speak("Cancelled.")
             elif event == "GESTURE_SCREENSHOT":
                 try:
                     from vision import Vision
@@ -2110,6 +2398,20 @@ class ARIA:
             return
         self._cleanup_done = True
         print("[ARIA] Releasing resources...")
+        
+        # Stop autonomous background learner
+        if hasattr(self, 'life_learner') and self.life_learner:
+            try:
+                self.life_learner.stop()
+            except Exception:
+                pass
+        
+        # Persist session summary for context carry-over
+        try:
+            self._persist_session_summary()
+        except Exception as e:
+            print(f"[ARIA/Cleanup] Failed to persist session summary: {e}")
+
         try:
             from skills.browser_skill import BrowserSkill
             BrowserSkill().close_browser()
@@ -2143,6 +2445,11 @@ class ARIA:
                 self.vision_learner.stop_camera()
             except Exception:
                 pass
+        if hasattr(self, 'wake_sentinel') and self.wake_sentinel:
+            try:
+                self.wake_sentinel.stop()
+            except Exception:
+                pass
         if hasattr(self, 'voice') and self.voice:
             try:
                 self.voice.cleanup()
@@ -2150,10 +2457,155 @@ class ARIA:
                 pass
         print("[ARIA] Shutdown complete.")
 
+    def _persist_session_summary(self):
+        import sqlite3
+        import time
+        username = (self.known_user or "chinmaya").lower().strip()
+        
+        # Check if we have anything to summarize
+        if not self.brain or not hasattr(self.brain, "chat_history") or not self.brain.chat_history:
+            print("[ARIA/SessionSummary] No chat history to summarize.")
+            return
+
+        db_path = "aria_memory.db"
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS session_summaries (
+                    username TEXT PRIMARY KEY,
+                    summary TEXT,
+                    updated_at REAL
+                )
+            """)
+            conn.commit()
+
+            # Retrieve last 10 episodic memories to augment context
+            cursor.execute(
+                "SELECT event_text FROM episodic_events WHERE username = ? ORDER BY timestamp DESC LIMIT 10",
+                (username,)
+            )
+            episodes = [row["event_text"] for row in cursor.fetchall()]
+            conn.close()
+        except Exception as e:
+            print(f"[ARIA/SessionSummary] Database setup/query error: {e}")
+            return
+
+        chat_lines = []
+        for msg in self.brain.chat_history[-20:]:
+            chat_lines.append(f"{msg['role'].capitalize()}: {msg['content']}")
+        chat_context = "\n".join(chat_lines)
+        episodes_context = "\n".join([f"- {ep}" for ep in episodes])
+
+        prompt = f"""Summarize the key topics discussed, goals established, or actions taken in this session into a concise list of 3 to 5 key facts.
+Focus strictly on what was actually done, requested, or achieved during this session.
+Format the output as a few short, clear bullet points.
+
+CONVERSATION HISTORY:
+{chat_context}
+
+RECENT EVENTS:
+{episodes_context}
+
+Provide only the bullet points in the summary, with no other text, introduction, or markdown header.
+"""
+
+        print("[ARIA/SessionSummary] Generating session summary via LLM...")
+        backup_history = list(self.brain.chat_history)
+        self.brain.chat_history = []
+        backup_lang = getattr(self.brain, "current_language", "en")
+        self.brain.current_language = "en"
+        try:
+            summary_response = self.brain._think_impl(prompt)
+        except Exception as e:
+            print(f"[ARIA/SessionSummary] LLM summary generation failed: {e}")
+            return
+        finally:
+            self.brain.chat_history = backup_history
+            self.brain.current_language = backup_lang
+
+        if summary_response:
+            clean_summary = summary_response.strip()
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO session_summaries (username, summary, updated_at) VALUES (?, ?, ?)",
+                    (username, clean_summary, time.time())
+                )
+                conn.commit()
+                conn.close()
+                print(f"[ARIA/SessionSummary] Saved summary for user '{username}':\n{clean_summary}")
+            except Exception as e:
+                print(f"[ARIA/SessionSummary] Database save error: {e}")
+
+    def _start_wake_sentinel(self):
+        try:
+            from skills.wake_word_sentinel import AriaWakeSentinel
+            
+            # State coordination provider: return True if system is busy
+            def is_system_busy():
+                return (
+                    getattr(self, 'state', None) in ("LISTENING", "THINKING", "TRANSCRIBING")
+                    or (self.voice is not None and getattr(self.voice, 'is_speaking', False))
+                )
+            
+            # Wake Callback
+            def on_wake_triggered():
+                print("\n[WakeSentinel] Wake word detected locally! Transitioning to LISTENING.")
+                self.state = "LISTENING"
+                set_state("LISTENING")
+                
+                # Play chime if voice is initialized
+                if self.voice:
+                    try:
+                        self.voice.play_audio_file("assets/wake_chime.wav")
+                    except Exception as play_err:
+                        print(f"[WakeSentinel] Chime playback failed: {play_err}")
+                
+                # Mark interaction time to initialize/open active window
+                self._mark_conversation_activity(wake_reason="wake_word")
+                self._was_in_conversation = True
+                
+                # Start a non-blocking dialog turn thread
+                def run_dialog_turn():
+                    set_text("Go ahead, I am listening...")
+                    self.assistant_replied = False
+                    user_input = self.voice.listen(timeout=8, phrase_time_limit=15, active_conversation=True)
+                    if user_input and self.running:
+                        if self.voice.is_valid_speech(user_input, active_conversation=True):
+                            self._handle_input(user_input)
+                        else:
+                            if not getattr(self, "assistant_replied", False):
+                                self._speak("I am listening, go ahead.")
+                    else:
+                        if not getattr(self, "assistant_replied", False):
+                            self._speak("I am listening, go ahead.")
+                
+                threading.Thread(target=run_dialog_turn, daemon=True).start()
+
+            self.wake_sentinel = AriaWakeSentinel(system_state_provider=is_system_busy)
+            if self.wake_sentinel.model is not None:
+                self.wake_sentinel_thread = threading.Thread(
+                    target=self.wake_sentinel.start_background_listening,
+                    args=(on_wake_triggered,),
+                    name="ARIA-WakeSentinel",
+                    daemon=True
+                )
+                self.wake_sentinel_thread.start()
+                print("[ARIA] Background local openWakeWord sentinel thread started.")
+            else:
+                print("[ARIA] WakeWord sentinel not started because custom model weights (aria.onnx) are missing.")
+        except Exception as e:
+            print(f"[ARIA] Could not initialize local WakeWord sentinel: {e}")
+
     # ── Main Loop ─────────────────────────────────────────────────────────────
     def run(self):
         try:
             self.initialize()
+            if not self.wake_mode:
+                self._start_wake_sentinel()
         except Exception as init_err:
             print(f"[ARIA] Fatal initialization error: {init_err}")
             import traceback
@@ -2280,14 +2732,14 @@ class ARIA:
                         # ── Always-On Mode ──────────────────────────────────
                         set_state("LISTENING")
                         set_text("Listening... speak anytime.")
-                        user_input = self.voice.listen(timeout=5, phrase_time_limit=20, active_conversation=in_conversation or is_owner_active)
+                        user_input = self.voice.listen(timeout=5, phrase_time_limit=20, active_conversation=in_conversation)
                         if user_input and self.running:
-                            if not self.voice.is_valid_speech(user_input, active_conversation=in_conversation or is_owner_active):
+                            if not self.voice.is_valid_speech(user_input, active_conversation=in_conversation):
                                 continue
                             
                             # Gating check: must contain wake word OR be within follow-up window
                             has_wake = any(w in user_input.lower() for w in self.WAKE_WORDS)
-                            if in_conversation or has_wake or is_owner_active:
+                            if in_conversation or has_wake:
                                 self._mark_conversation_activity(wake_reason="wake_word" if has_wake else "followup")
                                 self._handle_input(user_input)
                             else:
@@ -2295,13 +2747,10 @@ class ARIA:
 
                     else:
                         # ── Wake-Word Mode ─────────────────────────────────────
-                        if in_conversation or is_owner_active:
-                            # Continue conversation or listen because owner is active
+                        if in_conversation:
+                            # Continue conversation
                             set_state("LISTENING")
-                            if is_owner_active and not in_conversation:
-                                set_text("Listening (Owner active, no wake word needed)...")
-                            else:
-                                set_text("Listening (active conversation)...")
+                            set_text("Listening (active conversation)...")
                             user_input = self.voice.listen(timeout=6, phrase_time_limit=15, active_conversation=True)
                             if user_input and self.running:
                                 if self.voice.is_valid_speech(user_input, active_conversation=True):
@@ -2315,6 +2764,9 @@ class ARIA:
                             # Idle, waiting for wake word
                             set_state("IDLE")
                             set_text("Say 'Hey ARIA' to activate...")
+                            if self.wake_sentinel and self.wake_sentinel_thread and self.wake_sentinel_thread.is_alive():
+                                time.sleep(0.2)
+                                continue
                             detected = self.voice.listen_for_wake_word(self.WAKE_WORDS, timeout=3)
                             if detected and self.running:
                                 set_state("LISTENING")
@@ -2338,6 +2790,7 @@ class ARIA:
                                 # Set interaction time to initialize/open the active conversation window
                                 self._mark_conversation_activity(wake_reason="wake_word")
                                 self._was_in_conversation = True
+                                self.assistant_replied = False
 
                                 if remaining_input and self.running:
                                     print(f"[ARIA] Processing immediate query: '{remaining_input}'")
@@ -2350,9 +2803,11 @@ class ARIA:
                                         if self.voice.is_valid_speech(user_input, active_conversation=True):
                                             self._handle_input(user_input)
                                         else:
-                                            self._speak("I am listening, go ahead.")
+                                            if not getattr(self, "assistant_replied", False):
+                                                self._speak("I am listening, go ahead.")
                                     else:
-                                        self._speak("I am listening, go ahead.")
+                                        if not getattr(self, "assistant_replied", False):
+                                            self._speak("I am listening, go ahead.")
 
                 except KeyboardInterrupt:
                     raise
@@ -2664,7 +3119,7 @@ class ARIA:
                 if not self.camera or not self.camera.available:
                     self._speak("Gesture control needs the webcam but it is not available right now.")
                     return
-                msg = start_gesture_control(frame_provider=self.camera.capture_frame_raw)
+                msg = start_gesture_control(frame_provider=self.camera.capture_frame_raw, callback=self._gesture_event_callback)
                 self.gesture_mode = True
                 self._speak(msg)
             except Exception as e:
@@ -2698,10 +3153,10 @@ def main():
             print(f"[ARIA Venv Guard] Running on system Python. Auto-restarting inside virtual environment: {venv_python}")
             try:
                 result = subprocess.run([venv_python] + sys.argv)
-                sys.exit(result.returncode)
+                os._exit(result.returncode)
             except KeyboardInterrupt:
                 # Ctrl+C in venv child — exit cleanly without traceback
-                sys.exit(0)
+                os._exit(0)
 
     aria_instance = None
     qt_app = None
@@ -2713,6 +3168,15 @@ def main():
         if is_shutting_down:
             return
         is_shutting_down = True
+        
+        # Start a fallback watchdog thread to force exit if cleanup hangs
+        def force_exit_watchdog():
+            time.sleep(5.0)
+            print("[ShutdownCoordinator] Force exit watchdog triggered after 5s cleanup timeout.")
+            import os
+            os._exit(0)
+        
+        threading.Thread(target=force_exit_watchdog, daemon=True).start()
         
         print("\n[ShutdownCoordinator] SIGINT (Ctrl+C) or exit request received. Initiating graceful shutdown...")
         

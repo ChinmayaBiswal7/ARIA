@@ -60,6 +60,179 @@ def _get_access_token(service_account_path):
         return None
 
 
+def send_fcm_approval_push(action_tag: str, risk_level: str,
+                            description: str = "",
+                            service_account_path: str = SERVICE_ACCOUNT_PATH,
+                            config_path: str = CONFIG_PATH) -> bool:
+    """
+    Send an FCM push notification to the registered Android device asking
+    the user to approve or reject a HIGH/CRITICAL ARIA action.
+
+    Flow:
+      1. Read project_id from firebase_config.json
+      2. Read device FCM token from Firestore  (aria_config/fcm.token)
+      3. Mint an OAuth2 access token from the service account key
+      4. POST to FCM HTTP v1  messages:send  endpoint
+      5. Return True on success, False on any failure (caller continues)
+    """
+    import json, os, urllib.request, urllib.error
+
+    # 1. Read project id
+    project_id = ""
+    try:
+        with open(config_path) as _f:
+            project_id = json.load(_f).get("project_id", "").strip()
+    except Exception as _e:
+        print(f"[FCMApproval] Cannot read firebase_config.json: {_e}")
+        return False
+    if not project_id:
+        print("[FCMApproval] project_id missing – cannot push FCM.")
+        return False
+
+    # 2. Read FCM token from Firestore via firebase-admin (already initialised by main process)
+    fcm_token = None
+    try:
+        import firebase_admin
+        from firebase_admin import firestore as _fs
+        if firebase_admin._apps:
+            _db = _fs.client()
+            _doc = _db.collection("aria_config").document("fcm").get()
+            if _doc.exists:
+                fcm_token = _doc.to_dict().get("token")
+    except Exception as _e:
+        print(f"[FCMApproval] Firestore token read failed: {_e}")
+
+    if not fcm_token:
+        print("[FCMApproval] No FCM device token registered – cannot push notification.")
+        return False
+
+    # 3. Mint OAuth2 access token (reuse existing helper, but need FCM scope)
+    try:
+        import base64, time as _time
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.backends import default_backend
+
+        with open(service_account_path) as _sf:
+            _sa = json.load(_sf)
+
+        _iat = int(_time.time())
+        _exp = _iat + 3600
+        _header  = base64.urlsafe_b64encode(
+            json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=")
+        _payload = base64.urlsafe_b64encode(json.dumps({
+            "iss":   _sa["client_email"],
+            "scope": "https://www.googleapis.com/auth/firebase.messaging",
+            "aud":   "https://oauth2.googleapis.com/token",
+            "iat":   _iat,
+            "exp":   _exp,
+        }).encode()).rstrip(b"=")
+        _signing_input = _header + b"." + _payload
+        _private_key = serialization.load_pem_private_key(
+            _sa["private_key"].encode(), password=None, backend=default_backend())
+        _sig = _private_key.sign(_signing_input, padding.PKCS1v15(), hashes.SHA256())
+        _jwt = (_signing_input + b"." + base64.urlsafe_b64encode(_sig).rstrip(b"=")).decode()
+
+        _token_body = urllib.parse.urlencode({
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion":  _jwt
+        }).encode()
+        _treq = urllib.request.Request(
+            "https://oauth2.googleapis.com/token",
+            data=_token_body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(_treq, timeout=10) as _tr:
+            access_token = json.loads(_tr.read())["access_token"]
+    except Exception as _e:
+        print(f"[FCMApproval] OAuth2 token mint failed: {_e}")
+        return False
+
+    # 4. Send FCM v1 message
+    risk_emoji = "🔴" if risk_level == "CRITICAL" else "🟠"
+    body_text = description or action_tag
+    # Truncate body if long
+    if len(body_text) > 120:
+        body_text = body_text[:117] + "..."
+
+    fcm_payload = json.dumps({
+        "message": {
+            "token": fcm_token,
+            "notification": {
+                "title": f"{risk_emoji} ARIA Approval Required ({risk_level})",
+                "body": body_text
+            },
+            "data": {
+                "type": "approval_request",
+                "action_tag": action_tag,
+                "risk_level": risk_level,
+                "open_tab": "approvals"
+            },
+            "android": {
+                "priority": "HIGH",
+                "notification": {
+                    "channel_id": "aria_approvals",
+                    "notification_priority": "PRIORITY_MAX",
+                    "visibility": "PUBLIC",
+                    "default_vibrate_timings": "true",
+                    "default_sound": "true"
+                }
+            }
+        }
+    }).encode()
+
+    fcm_url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+    _freq = urllib.request.Request(
+        fcm_url,
+        data=fcm_payload,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+    )
+    try:
+        with urllib.request.urlopen(_freq, timeout=10) as _fr:
+            _resp = json.loads(_fr.read())
+            print(f"[FCMApproval] Push sent successfully: {_resp.get('name', 'OK')}")
+            return True
+    except urllib.error.HTTPError as _he:
+        _err_body = _he.read().decode("utf-8", errors="replace")
+        print(f"[FCMApproval] FCM HTTP error {_he.code}: {_err_body[:200]}")
+        return False
+    except Exception as _e:
+        print(f"[FCMApproval] FCM push failed: {_e}")
+        return False
+
+
+def sync_profile_to_firestore(snapshot):
+    """
+    Sync user profile insights snapshot to Firestore 'profile_insights/latest' document.
+    """
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        
+        # Resolve service account path relative to workspace root
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sa_path = os.path.join(base_path, SERVICE_ACCOUNT_PATH)
+        
+        if not firebase_admin._apps:
+            if os.path.exists(sa_path):
+                cred = credentials.Certificate(sa_path)
+                firebase_admin.initialize_app(cred)
+            else:
+                print(f"[FirebaseSync] Service account key not found at {sa_path}. Skipping firestore sync.")
+                return False
+                
+        db = firestore.client()
+        doc_ref = db.collection("profile_insights").document("latest")
+        doc_ref.set(snapshot)
+        print("[FirebaseSync] Profile insights successfully synced to Firestore.")
+        return True
+    except Exception as e:
+        print(f"[FirebaseSync] Profile insights sync failed: {e}")
+        return False
+
+
 class FirebaseSync:
     """Listens to Cloud Firestore to execute remote commands.
 
@@ -87,6 +260,7 @@ class FirebaseSync:
         self.first_read_done  = False
         self.screenshot_quality = "medium"
         self.health_skill     = HealthSkill()
+        self.vault_dir        = "data/knowledge_vault"
         self._load_config()
 
     # ── Config ────────────────────────────────────────────────────────────────
@@ -324,6 +498,54 @@ class FirebaseSync:
                 except Exception as e:
                     pass
 
+                # Also poll scanned_documents where synced_to_pc == false
+                url_scans = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
+                             f"/databases/(default)/documents:runQuery")
+                scans_payload = {
+                    "structuredQuery": {
+                        "from": [{"collectionId": "scanned_documents"}],
+                        "where": {
+                            "fieldFilter": {
+                                "field": {"fieldPath": "synced_to_pc"},
+                                "op": "EQUAL",
+                                "value": {"booleanValue": False}
+                            }
+                        }
+                    }
+                }
+                try:
+                    headers_scans = {"Content-Type": "application/json"}
+                    if token:
+                        headers_scans["Authorization"] = f"Bearer {token}"
+                    req_scans = urllib.request.Request(url_scans, data=json.dumps(scans_payload).encode(),
+                                                       headers=headers_scans, method="POST")
+                    with urllib.request.urlopen(req_scans, timeout=10) as resp_scans:
+                        scans_data = json.loads(resp_scans.read().decode())
+                        if isinstance(scans_data, list):
+                            for doc_wrapper in scans_data:
+                                if doc_wrapper and "document" in doc_wrapper:
+                                    doc_info = doc_wrapper["document"]
+                                    name_parts = doc_info["name"].split("/")
+                                    doc_id = name_parts[-1]
+                                    fields = doc_info.get("fields", {})
+                                    
+                                    data = {}
+                                    for k, v in fields.items():
+                                        val_type = list(v.keys())[0]
+                                        data[k] = v[val_type]
+                                        if val_type == "integerValue":
+                                            data[k] = int(data[k])
+                                        elif val_type == "doubleValue":
+                                            data[k] = float(data[k])
+                                        elif val_type == "booleanValue":
+                                            data[k] = bool(data[k])
+                                    
+                                    if not data.get("synced_to_pc", False):
+                                        print(f"[FirebaseSync] REST document scan received: {doc_id}")
+                                        threading.Thread(target=self._process_incoming_scan, args=(doc_id, data), daemon=True).start()
+                except Exception as e:
+                    pass
+
             except urllib.error.HTTPError as e:
                 consecutive_errors += 1
                 body = e.read().decode(errors="ignore") if e.fp else ""
@@ -531,6 +753,10 @@ class FirebaseSync:
                 
                 health_ref = self.firestore_client.collection("health").document("latest")
                 self.health_listener = health_ref.on_snapshot(self._on_health_snapshot)
+
+                scans_ref = self.firestore_client.collection("scanned_documents")
+                scans_query = scans_ref.where("synced_to_pc", "==", False)
+                self.scans_listener = scans_query.on_snapshot(self._on_scans_snapshot)
                 
                 self.update_status("ARIA online. Ready.", status_str="idle")
                 print("[FirebaseSync] Real-time SDK listener started. OK")
@@ -571,6 +797,11 @@ class FirebaseSync:
                 self.health_listener.unsubscribe()
             except Exception:
                 pass
+        if hasattr(self, 'scans_listener') and self.scans_listener:
+            try:
+                self.scans_listener.unsubscribe()
+            except Exception:
+                pass
 
     def _on_health_snapshot(self, doc_snapshot, changes, read_time):
         for doc in doc_snapshot:
@@ -595,6 +826,183 @@ class FirebaseSync:
                 spo2=spo2,
                 timestamp=timestamp
             )
+
+    def _on_scans_snapshot(self, col_snapshot, changes, read_time):
+        for change in changes:
+            if change.type.name in ["ADDED", "MODIFIED"]:
+                doc = change.document
+                data = doc.to_dict()
+                if not data.get("synced_to_pc", False):
+                    print(f"[FirebaseSync] New document scan snapshot received: {doc.id}")
+                    threading.Thread(target=self._process_incoming_scan, args=(doc.id, data), daemon=True).start()
+
+    def _get_aria_instance(self):
+        if self.callback and hasattr(self.callback, "__self__"):
+            return self.callback.__self__
+        try:
+            main_mod = __import__('__main__')
+            return getattr(main_mod, 'instance', None) or getattr(main_mod, 'aria_instance', None)
+        except Exception:
+            return None
+
+    def _calculate_jaccard_similarity(self, text1: str, text2: str) -> float:
+        import re
+        words1 = set(re.findall(r'\w+', text1.lower()))
+        words2 = set(re.findall(r'\w+', text2.lower()))
+        if not words1 and not words2:
+            return 1.0
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        return len(intersection) / len(union)
+
+    def _classify_topic_with_gemini(self, text: str) -> str:
+        aria = self._get_aria_instance()
+        if aria and getattr(aria, "brain", None):
+            prompt = f"""
+            You are ARIA's topic classification brain.
+            Analyze the following text extracted via OCR and classify it into exactly one of these topics:
+            DBMS, OS, CN, JAVA, DSA, GENERAL.
+
+            Respond with ONLY the topic name (e.g. "DBMS"). Do not include any explanation or extra text.
+
+            == EXTRACTED TEXT ==
+            {text[:2000]}
+            """
+            try:
+                result = aria.brain.think(prompt).strip().upper()
+                valid_topics = ["DBMS", "OS", "CN", "JAVA", "DSA", "GENERAL"]
+                for t in valid_topics:
+                    if t in result:
+                        return t
+            except Exception as e:
+                print(f"[FirebaseSync] Gemini classification failed: {e}")
+        
+        # Fallback to simple keyword heuristics
+        text_lower = text.lower()
+        if any(w in text_lower for w in ["database", "dbms", "sql", "transaction", "isolation", "query"]):
+            return "DBMS"
+        if any(w in text_lower for w in ["process", "thread", "scheduling", "semaphore", "deadlock", "memory management"]):
+            return "OS"
+        if any(w in text_lower for w in ["ip address", "tcp", "udp", "routing", "network", "packet", "http"]):
+            return "CN"
+        if any(w in text_lower for w in ["java", "class", "interface", "polymorphism", "inheritance", "garbage collection"]):
+            return "JAVA"
+        if any(w in text_lower for w in ["array", "list", "tree", "graph", "binary search", "sorting", "dsa"]):
+            return "DSA"
+        return "GENERAL"
+
+    def _download_scan_image(self, image_path: str, local_dest: str):
+        try:
+            from firebase_admin import storage
+            bucket = storage.bucket(f"{self.project_id}.firebasestorage.app")
+            blob = bucket.blob(image_path)
+            os.makedirs(os.path.dirname(local_dest), exist_ok=True)
+            blob.download_to_filename(local_dest)
+            print(f"[FirebaseSync] Scanned image downloaded to: {local_dest}")
+            return True
+        except Exception as e:
+            print(f"[FirebaseSync] Failed to download scan image: {e}")
+            return False
+
+    def _process_incoming_scan(self, doc_id: str, data: dict):
+        try:
+            import re
+            text = data.get("text", "").strip()
+            title = data.get("title", f"scan_{int(time.time())}").strip()
+            
+            if not text:
+                print(f"[FirebaseSync] Incoming scan {doc_id} has empty text. Skipping.")
+                return
+
+            self.update_status(f"Ingesting scan: {title}...", status_str="thinking")
+
+            # 1. Jaccard similarity duplicate check
+            is_duplicate = False
+            duplicate_source = ""
+            vault_dir = self.vault_dir
+            if os.path.exists(vault_dir):
+                for root, _, files in os.walk(vault_dir):
+                    for file in files:
+                        if file.endswith(".txt"):
+                            file_path = os.path.join(root, file)
+                            try:
+                                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                                    existing_text = f.read()
+                                similarity = self._calculate_jaccard_similarity(text, existing_text)
+                                if similarity > 0.85:
+                                    is_duplicate = True
+                                    duplicate_source = file
+                                    break
+                            except Exception as ex:
+                                print(f"[FirebaseSync] Error checking duplicate against {file}: {ex}")
+
+            if is_duplicate:
+                print(f"[FirebaseSync] Duplicate detected: incoming scan matches '{duplicate_source}' (>85% Jaccard). Skipping.")
+                if self.firestore_client:
+                    self.firestore_client.collection("scanned_documents").document(doc_id).update({
+                        "synced_to_pc": True,
+                        "synced_at": time.time(),
+                        "sync_status": f"SKIPPED_DUPLICATE_OF_{duplicate_source}"
+                    })
+                self.update_status(f"Skipped duplicate scan matching '{duplicate_source}'", status_str="idle")
+                return
+
+            # 2. Topic classification
+            topic = self._classify_topic_with_gemini(text)
+            print(f"[FirebaseSync] Scan classified as: {topic}")
+
+            # 3. Clean title for filename
+            clean_title = re.sub(r'[^a-zA-Z0-9_\- ]', '', title).strip().replace(" ", "_").lower()
+            if not clean_title:
+                clean_title = f"scan_{int(time.time())}"
+
+            # 4. Download image locally if available
+            image_path = data.get("image_path")
+            local_image_path = ""
+            if image_path:
+                local_image_name = f"{clean_title}_{int(time.time())}.jpg"
+                local_dest = os.path.join(vault_dir, topic.lower(), "images", local_image_name)
+                if self._download_scan_image(image_path, local_dest):
+                    local_image_path = local_dest
+
+            # 5. Write text file to topic directory under vault
+            topic_dir = os.path.join(vault_dir, topic.lower())
+            os.makedirs(topic_dir, exist_ok=True)
+            txt_path = os.path.join(topic_dir, f"{clean_title}.txt")
+            
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(f"--- METADATA ---\n")
+                f.write(f"Title: {title}\n")
+                f.write(f"Topic: {topic}\n")
+                f.write(f"OCR Confidence: {data.get('ocr_confidence', 0.0):.2f}\n")
+                f.write(f"Source: mobile_scan\n")
+                if local_image_path:
+                    f.write(f"Image Path: {local_image_path}\n")
+                f.write(f"Created At: {data.get('created_at', '')}\n")
+                f.write(f"Synced At: {time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime())}\n")
+                f.write(f"----------------\n\n")
+                f.write(text)
+
+            print(f"[FirebaseSync] Saved scan document to: {txt_path}")
+
+            # 6. Trigger incremental re-indexing
+            from skills.knowledge_search_agent import AriaKnowledgeSearchAgent
+            agent = AriaKnowledgeSearchAgent(self._get_aria_instance(), vault_dir=vault_dir)
+            agent.rebuild_knowledge_index()
+
+            # 7. Update Firestore status
+            if self.firestore_client:
+                self.firestore_client.collection("scanned_documents").document(doc_id).update({
+                    "synced_to_pc": True,
+                    "synced_at": time.time(),
+                    "sync_status": "SUCCESS",
+                    "assigned_topic": topic
+                })
+
+            self.update_status(f"Ingested '{title}' into Knowledge Vault ({topic})", status_str="idle")
+        except Exception as e:
+            print(f"[FirebaseSync] Scan processing error: {e}")
+            self.update_status(f"Scan ingestion failed: {e}", status_str="idle")
 
     def upload_pending_images(self, image_gen):
         if not self.firestore_client:

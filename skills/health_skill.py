@@ -95,6 +95,33 @@ class HealthSkill:
             cursor.execute("SELECT * FROM health_data ORDER BY date DESC LIMIT ?", (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_rolling_biometric_stats(self, limit_days=7) -> dict:
+        """Computes rolling averages for sleep and activity metrics from health_data."""
+        history = self.get_recent_history(limit=limit_days)
+        if not history:
+            return {
+                "rolling_sleep_avg": 7.5,
+                "sleep_debt": 0.0,
+                "rolling_steps_avg": 5000
+            }
+        
+        sleep_hours_list = [h["sleep_hours"] for h in history if h.get("sleep_hours") is not None]
+        steps_list = [h["steps"] for h in history if h.get("steps") is not None]
+        
+        rolling_sleep_avg = sum(sleep_hours_list) / len(sleep_hours_list) if sleep_hours_list else 7.5
+        rolling_steps_avg = sum(steps_list) / len(steps_list) if steps_list else 5000
+        
+        # Cumulative sleep debt against a standard 7.5-hour target per night
+        expected_sleep = len(history) * 7.5
+        actual_sleep = sum([h.get("sleep_hours") or 0.0 for h in history])
+        sleep_debt = max(0.0, round(expected_sleep - actual_sleep, 2))
+        
+        return {
+            "rolling_sleep_avg": round(rolling_sleep_avg, 2),
+            "sleep_debt": sleep_debt,
+            "rolling_steps_avg": int(rolling_steps_avg)
+        }
+
     def generate_summary(self):
         """Generates a text summary of the latest health status to inject into ARIA's prompt context."""
         latest = self.get_latest_metrics()

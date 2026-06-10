@@ -72,6 +72,11 @@ class IntentClassifier:
         r'\b(tab|browser|current page|active page)\b',
     ]
 
+    # Tier 6: CAREER INTENTS
+    CAREER_PATTERNS = [
+        r'\b(career|job list|bookmark job|codeforces stats|analyze match|resume match|github stats)\b',
+    ]
+
     # ML Prototype Phrases for Sentence Similarity
     PROTOTYPE_PHRASES = {
         "repair": [
@@ -106,6 +111,10 @@ class IntentClassifier:
             "what's on the screen", "read the page", "what is on the page", "web page content", "website text",
             "active tab", "browser tab", "read current website", "view the current webpage", "what is in the browser"
         ],
+        "career": [
+            "show my career list", "bookmark job", "analyze match for", "resume matching",
+            "get codeforces stats", "my job applications", "add job to list"
+        ],
     }
 
     def __init__(self):
@@ -117,6 +126,7 @@ class IntentClassifier:
             "followup": [re.compile(p, re.IGNORECASE) for p in self.FOLLOWUP_PATTERNS],
             "search": [re.compile(p, re.IGNORECASE) for p in self.SEARCH_PATTERNS],
             "browser": [re.compile(p, re.IGNORECASE) for p in self.BROWSER_PATTERNS],
+            "career": [re.compile(p, re.IGNORECASE) for p in self.CAREER_PATTERNS],
         }
 
         # Initialize ML model from ChromaDB's DefaultEmbeddingFunction
@@ -167,6 +177,18 @@ class IntentClassifier:
             print(f"[IntentClassifier/Guard] '{user_input[:50]}' -> search (confidence: 0.92, explicit site action)")
             return "search", 0.92
 
+        # Whitelist obvious job/career search intents to bypass low confidence and clarification
+        job_keywords = ["internship", "job", "career", "placement", "opening", "vacancy"]
+        if any(kw in query for kw in job_keywords):
+            # Verify it's not a conversational/identity/memory query first
+            is_conversational = any(pattern.search(query) for pattern in self.compiled_patterns["conversation"])
+            is_identity = any(pattern.search(query) for pattern in self.compiled_patterns["identity"])
+            is_memory = any(pattern.search(query) for pattern in self.compiled_patterns["memory"])
+            
+            if not (is_conversational or is_identity or is_memory):
+                print(f"[IntentClassifier/Whitelist] '{user_input[:50]}' contains job/career keyword -> search (confidence: 0.95)")
+                return "search", 0.95
+
         # Step 3: ML Similarity Classification (if available)
         if self.use_ml:
             try:
@@ -195,7 +217,7 @@ class IntentClassifier:
                 print(f"[IntentClassifier/ML] Classification failed: {e}. Falling back to regex.")
 
         # Step 4: Regex-based fallback
-        for intent_type in ["repair", "identity", "memory", "followup", "browser", "search"]:
+        for intent_type in ["repair", "identity", "memory", "followup", "browser", "search", "career"]:
             if skip_repair and intent_type == "repair":
                 continue
             patterns = self.compiled_patterns[intent_type]
@@ -228,6 +250,8 @@ class IntentClassifier:
                             confidence = 0.90
                         else:
                             confidence = 0.75
+                    elif intent_type == "career":
+                        confidence = 0.95
                     else:
                         confidence = 0.80
 
@@ -274,6 +298,11 @@ class IntentClassifier:
                 "general_chat": True,
                 "no_web_search": True,
                 "priority": 6,
+            },
+            "career": {
+                "needs_memory": True,
+                "no_web_search": True,
+                "priority": 7,
             },
         }
         return metadata.get(intent_type, {})

@@ -34,6 +34,17 @@ class BrowserSkill:
     def __init__(self):
         pass
 
+    def _get_convergence_overrides(self):
+        try:
+            from skills.intelligence_convergence_hub import AriaIntelligenceConvergenceHub
+            return AriaIntelligenceConvergenceHub().generate_convergence_overrides()
+        except Exception:
+            return {"timeout_factor": 1.0, "extra_delay": 0.0}
+
+    def _scale_timeout(self, default_ms: int) -> int:
+        factor = self._get_convergence_overrides().get("timeout_factor", 1.0)
+        return min(int(default_ms * factor), 30000)
+
     def start_browser(self, headless: bool = BROWSER_HEADLESS):
         """
         Starts browser in headed mode by default.
@@ -134,19 +145,19 @@ class BrowserSkill:
 
         try:
             print(f"[BrowserSkill] Navigating to {url}...")
-            self.page.goto(url, wait_until="load", timeout=20000)
+            self.page.goto(url, wait_until="load", timeout=self._scale_timeout(20000))
             
             # Navigation readiness validation
             try:
-                self.page.wait_for_load_state("domcontentloaded", timeout=10000)
-                self.page.wait_for_load_state("networkidle", timeout=5000)
+                self.page.wait_for_load_state("domcontentloaded", timeout=self._scale_timeout(10000))
+                self.page.wait_for_load_state("networkidle", timeout=self._scale_timeout(5000))
             except Exception:
                 pass
                 
             # Stabilization wait
             if "amazon" in url.lower():
                 try:
-                    self.page.wait_for_selector("input", timeout=5000)
+                    self.page.wait_for_selector("input", timeout=self._scale_timeout(5000))
                 except Exception:
                     pass
                 time.sleep(3.0)  # 3-second stabilization wait for Amazon
@@ -160,15 +171,15 @@ class BrowserSkill:
             print(f"[BrowserSkill] Navigation failed: {e} — retrying after recovery...")
             self._ensure_browser()
             try:
-                self.page.goto(url, wait_until="load", timeout=20000)
+                self.page.goto(url, wait_until="load", timeout=self._scale_timeout(20000))
                 try:
-                    self.page.wait_for_load_state("domcontentloaded", timeout=10000)
-                    self.page.wait_for_load_state("networkidle", timeout=5000)
+                    self.page.wait_for_load_state("domcontentloaded", timeout=self._scale_timeout(10000))
+                    self.page.wait_for_load_state("networkidle", timeout=self._scale_timeout(5000))
                 except Exception:
                     pass
                 if "amazon" in url.lower():
                     try:
-                        self.page.wait_for_selector("input", timeout=5000)
+                        self.page.wait_for_selector("input", timeout=self._scale_timeout(5000))
                     except Exception:
                         pass
                     time.sleep(3.0)
@@ -282,8 +293,8 @@ class BrowserSkill:
                 self.navigate("https://www.amazon.in")
             else:
                 try:
-                    self.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                    self.page.wait_for_selector("input", timeout=5000)
+                    self.page.wait_for_load_state("domcontentloaded", timeout=self._scale_timeout(5000))
+                    self.page.wait_for_selector("input", timeout=self._scale_timeout(5000))
                 except Exception:
                     pass
 
@@ -291,7 +302,7 @@ class BrowserSkill:
             search_input = None
             for sel in search_selectors:
                 try:
-                    self.page.wait_for_selector(sel, state="visible", timeout=3000)
+                    self.page.wait_for_selector(sel, state="visible", timeout=self._scale_timeout(3000))
                     search_input = self.page.locator(sel)
                     break
                 except Exception:
@@ -307,7 +318,7 @@ class BrowserSkill:
             submit_button = None
             for sel in submit_selectors:
                 try:
-                    self.page.wait_for_selector(sel, state="visible", timeout=2000)
+                    self.page.wait_for_selector(sel, state="visible", timeout=self._scale_timeout(2000))
                     submit_button = self.page.locator(sel)
                     break
                 except Exception:
@@ -319,7 +330,7 @@ class BrowserSkill:
                 self.page.keyboard.press("Enter")
 
             try:
-                self.page.wait_for_load_state("load", timeout=10000)
+                self.page.wait_for_load_state("load", timeout=self._scale_timeout(10000))
             except Exception:
                 pass
             print(f"[BrowserSkill] Amazon search submitted successfully for '{product_name}'.")
@@ -341,13 +352,13 @@ class BrowserSkill:
                 self.navigate("https://www.youtube.com")
 
             search_input = self.page.locator("input#search")
-            if not search_input.is_visible(timeout=5000):
+            if not search_input.is_visible(timeout=self._scale_timeout(5000)):
                 search_input = self.page.locator("input[name='search_query']")
 
             search_input.fill(query)
             
             search_button = self.page.locator("button#search-icon-legacy")
-            if search_button.is_visible(timeout=2000):
+            if search_button.is_visible(timeout=self._scale_timeout(2000)):
                 search_button.click()
             else:
                 self.page.keyboard.press("Enter")
@@ -403,7 +414,7 @@ class BrowserSkill:
                 self.page.keyboard.press("Enter")
                 # Wait for navigation/results
                 try:
-                    self.page.wait_for_load_state("load", timeout=5000)
+                    self.page.wait_for_load_state("load", timeout=self._scale_timeout(5000))
                 except Exception:
                     pass
                 self._update_page_state()
@@ -423,11 +434,11 @@ class BrowserSkill:
         for sel in search_selectors:
             try:
                 loc = self.page.locator(sel).first
-                if loc.is_visible(timeout=1000):
+                if loc.is_visible(timeout=self._scale_timeout(1000)):
                     loc.fill(query)
                     self.page.keyboard.press("Enter")
                     try:
-                        self.page.wait_for_load_state("load", timeout=5000)
+                        self.page.wait_for_load_state("load", timeout=self._scale_timeout(5000))
                     except Exception:
                         pass
                     self._update_page_state()
@@ -466,7 +477,7 @@ class BrowserSkill:
                         ]
                         for sel in link_selectors:
                             link_loc = item.locator(sel).first
-                            if link_loc.is_visible(timeout=1000):
+                            if link_loc.is_visible(timeout=self._scale_timeout(1000)):
                                 href = link_loc.get_attribute("href")
                                 if href:
                                     if "slredirect" in href or "/gp/slredirect/" in href:
@@ -495,7 +506,7 @@ class BrowserSkill:
                     locators = self.page.locator(sel)
                     for idx in range(locators.count()):
                         locator = locators.nth(idx)
-                        if locator.is_visible(timeout=1000):
+                        if locator.is_visible(timeout=self._scale_timeout(1000)):
                             href = locator.get_attribute("href")
                             if href and ("slredirect" in href or "/gp/slredirect/" in href):
                                 print(f"[BrowserSkill] Skipping sponsored product link redirect: {href}")
@@ -521,7 +532,7 @@ class BrowserSkill:
                 ]
                 for sel in selectors:
                     locator = self.page.locator(sel).first
-                    if locator.is_visible(timeout=3000):
+                    if locator.is_visible(timeout=self._scale_timeout(3000)):
                         print("[BrowserSkill] Clicking YouTube video link")
                         locator.click()
                         print("[BrowserSkill] Playing first video result successfully.")
@@ -546,7 +557,7 @@ class BrowserSkill:
                     for idx in range(count):
                         loc = locators.nth(idx)
                         try:
-                            if loc.is_visible(timeout=1000):
+                            if loc.is_visible(timeout=self._scale_timeout(1000)):
                                 href = loc.get_attribute("href")
                                 if href:
                                     if "/aclk" in href or "google.com/aclk" in href or "adurl" in href:
@@ -583,7 +594,7 @@ class BrowserSkill:
                         return f"Clicked first result card: {first_card_id}"
                 
                 link = self.page.locator("a").first
-                if link.is_visible(timeout=2000):
+                if link.is_visible(timeout=self._scale_timeout(2000)):
                     print("[BrowserSkill] Clicking first generic link on page")
                     link.click()
                     print("[BrowserSkill] Clicked first generic link successfully.")
@@ -613,7 +624,7 @@ class BrowserSkill:
             for sel in selectors:
                 try:
                     loc = self.page.locator(sel).first
-                    if loc.is_visible(timeout=3000):
+                    if loc.is_visible(timeout=self._scale_timeout(3000)):
                         button = loc
                         break
                 except Exception:
@@ -792,7 +803,7 @@ class BrowserSkill:
                 for sel in search_selectors:
                     try:
                         loc = self.page.locator(sel).first
-                        if loc.is_visible(timeout=1000):
+                        if loc.is_visible(timeout=self._scale_timeout(1000)):
                             loc.click()
                             print(f"[BrowserSkill] Clicked search field using selector '{sel}'.")
                             is_no_op = self.record_action("click_element", sel, success=True)
@@ -811,9 +822,9 @@ class BrowserSkill:
                 return f"Clicked element matching selector '{text_or_selector}'."
             else:
                 loc = self.page.get_by_text(text_or_selector, exact=False).first
-                if not loc.is_visible(timeout=2000):
+                if not loc.is_visible(timeout=self._scale_timeout(2000)):
                     loc = self.page.get_by_role("button", name=text_or_selector, exact=False).first
-                if not loc.is_visible(timeout=2000):
+                if not loc.is_visible(timeout=self._scale_timeout(2000)):
                     loc = self.page.get_by_role("link", name=text_or_selector, exact=False).first
                 
                 loc.click()
@@ -882,7 +893,7 @@ class BrowserSkill:
             ]
             for loc in locators:
                 try:
-                    if loc.is_visible(timeout=1500):
+                    if loc.is_visible(timeout=self._scale_timeout(1500)):
                         loc.fill(value)
                         print(f"[BrowserSkill] Filled text/label field '{text_or_selector}' successfully.")
                         self.record_action("fill", text_or_selector, success=True)
@@ -1315,6 +1326,17 @@ class BrowserSkill:
         # After executing, update page state and compute new fingerprint
         time.sleep(0.5) # Allow page to process layout updates
         self._update_page_state()
+
+        # Convergence: Inject extra delay sleep if latency mitigation is active
+        try:
+            overrides = self._get_convergence_overrides()
+            extra = overrides.get("extra_delay", 0.0)
+            if extra > 0:
+                print(f"[BrowserSkill] Latency mitigation active: Injecting {extra}s extra delay.")
+                time.sleep(extra)
+        except Exception as e:
+            print(f"[BrowserSkill] Failed to apply latency extra delay: {e}")
+            
         fp_after = self._compute_page_fingerprint()
         
         print("DEBUG RECORD_ACTION fp_before:", fp_before)

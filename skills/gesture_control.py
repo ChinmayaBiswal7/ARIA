@@ -136,12 +136,19 @@ class GestureController:
         or None if the camera is temporarily busy / unavailable.
     """
 
-    def __init__(self, frame_provider):
+    def __init__(self, frame_provider, callback=None):
         if not MEDIAPIPE_AVAILABLE:
             raise RuntimeError("mediapipe is not installed.")
         self._frame_provider = frame_provider
+        self._callback       = callback
         self._running        = False
         self._thread         = None
+        
+        # High-level gesture states
+        self._wave_cooldown = 0.0
+        self._confirm_cooldown = 0.0
+        self._cancel_cooldown = 0.0
+        self._x_history = []
 
         # Cursor EMA state
         self._sx: float | None = None
@@ -364,10 +371,88 @@ class GestureController:
         else:
             self._prev_vol_y = None
 
+    def _check_high_level_events(self, lm, fingers, now) -> bool:
+        # Distance-based folding checks
+        palm_len = _dist(lm[0], lm[9])
+        if palm_len == 0:
+            return False
+            
+        index_dist = _dist(lm[8], lm[9])
+        middle_dist = _dist(lm[12], lm[9])
+        ring_dist = _dist(lm[16], lm[9])
+        pinky_dist = _dist(lm[20], lm[9])
+        
+        # Folded state definition: tips are close to the middle MCP (palm center)
+        fingers_folded = (index_dist < palm_len * 1.1 and 
+                          middle_dist < palm_len * 1.1 and 
+                          ring_dist < palm_len * 1.1 and 
+                          pinky_dist < palm_len * 1.1)
+                          
+        # 1. Thumbs Up (GESTURE_CONFIRM)
+        if fingers_folded and fingers[0] and lm[4].y < lm[2].y:
+            if _dist(lm[4], lm[9]) > palm_len * 1.2:
+                if now - self._confirm_cooldown > 2.0:
+                    print("[GestureControl] Thumbs Up detected (Confirm)")
+                    self._confirm_cooldown = now
+                    if self._callback:
+                        self._callback("GESTURE_CONFIRM")
+                return True
+                
+        # 2. Thumbs Down (GESTURE_CANCEL)
+        if fingers_folded and lm[4].y > lm[2].y:
+            if _dist(lm[4], lm[9]) > palm_len * 1.2:
+                if now - self._cancel_cooldown > 2.0:
+                    print("[GestureControl] Thumbs Down detected (Cancel)")
+                    self._cancel_cooldown = now
+                    if self._callback:
+                        self._callback("GESTURE_CANCEL")
+                return True
+
+        # 3. Horizontal Wave Detection (GESTURE_WAKE)
+        self._x_history.append(lm[9].x)
+        if len(self._x_history) > 25:
+            self._x_history.pop(0)
+
+        # Check for wave gesture: all fingers open (index, middle, ring, pinky)
+        if fingers[1] and fingers[2] and fingers[3] and fingers[4]:
+            if len(self._x_history) >= 15:
+                deltas = []
+                for i in range(1, len(self._x_history)):
+                    d = self._x_history[i] - self._x_history[i-1]
+                    if abs(d) > 0.002:
+                        deltas.append(d)
+                
+                sign_changes = 0
+                prev_sign = None
+                for d in deltas:
+                    sign = 1 if d > 0 else -1
+                    if prev_sign is not None and sign != prev_sign:
+                        sign_changes += 1
+                    prev_sign = sign
+                
+                total_abs_movement = sum(abs(d) for d in deltas)
+                if sign_changes >= 3 and total_abs_movement > 0.12:
+                    if now - self._wave_cooldown > 3.0:
+                        print(f"[GestureControl] Wave detected! Sign changes: {sign_changes}, movement: {total_abs_movement:.3f}")
+                        self._wave_cooldown = now
+                        self._x_history.clear()
+                        if self._callback:
+                            self._callback("GESTURE_WAKE")
+                    return True
+                    
+        return False
+
     def _process(self, lm):
         """Run all gesture checks for one frame's landmarks."""
         fingers = _fingers_up(lm)
         now     = time.time()
+        
+        # Check for high-level events (Thumbs Up, Thumbs Down, Wave) first.
+        # If triggered, bypass standard mouse control commands.
+        if self._check_high_level_events(lm, fingers, now):
+            self._reset_state()
+            return
+            
         self._move_cursor(lm)
         self._check_click(lm, fingers, now)
         self._check_right_click(lm, fingers, now)
@@ -483,13 +568,13 @@ def is_active() -> bool:
     return _controller is not None and _controller._running
 
 
-def start_gesture_control(frame_provider) -> str:
+def start_gesture_control(frame_provider, callback=None) -> str:
     """
     Start gesture control using the provided frame_provider callable.
     frame_provider() must return a BGR numpy array or None.
 
     Typically called as:
-        start_gesture_control(aria.camera.capture_frame_raw)
+        start_gesture_control(aria.camera.capture_frame_raw, callback=aria._gesture_event_callback)
     """
     global _controller
     if not MEDIAPIPE_AVAILABLE:
@@ -497,7 +582,7 @@ def start_gesture_control(frame_provider) -> str:
     with _ctrl_lock:
         if _controller is not None and _controller._running:
             return "Gesture control is already active."
-        _controller = GestureController(frame_provider=frame_provider)
+        _controller = GestureController(frame_provider=frame_provider, callback=callback)
         _controller.start()
     return "Gesture control enabled. I can track your hand movements."
 

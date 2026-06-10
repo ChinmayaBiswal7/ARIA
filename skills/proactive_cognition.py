@@ -54,12 +54,11 @@ class ProactiveCognition:
         Negative feedback (e.g. 'stop', 'be quiet') doubles the cooldown multiplier.
         Positive feedback (e.g. 'thanks', 'sure') resets it to 1.0.
         """
+        from skills.command_patterns import FEEDBACK_NEGATIVE_WORDS, FEEDBACK_POSITIVE_WORDS
         f = feedback.lower().strip()
-        negative_words = ["stop", "quiet", "shut up", "be quiet", "don't talk", "no suggestions", "go away", "ignore", "annoying", "mute"]
-        positive_words = ["thanks", "thank you", "sure", "yes", "do it", "do that", "okay", "ok", "helpful", "cool"]
 
         old_mult = self.cooldown_multiplier
-        if any(w in f for w in negative_words):
+        if any(w in f for w in FEEDBACK_NEGATIVE_WORDS):
             # Double multiplier up to 16.0 (approx 4 hours for a 15-min base)
             self.cooldown_multiplier = min(16.0, self.cooldown_multiplier * 2.0)
             print(f"[ProactiveCognition] Negative feedback detected: '{feedback}'. Cooldown multiplier increased: {old_mult}x -> {self.cooldown_multiplier}x")
@@ -74,7 +73,7 @@ class ProactiveCognition:
                 )
             except Exception:
                 pass
-        elif any(w in f for w in positive_words):
+        elif any(w in f for w in FEEDBACK_POSITIVE_WORDS):
             self.cooldown_multiplier = 1.0
             print(f"[ProactiveCognition] Positive feedback detected: '{feedback}'. Cooldown multiplier reset to 1.0x")
             try:
@@ -192,6 +191,16 @@ class ProactiveCognition:
         Checks for silence preferences and confidence thresholds before suggesting.
         """
         try:
+            # 0. Check Convergence Overrides (Silent mode / low receptiveness)
+            try:
+                from skills.intelligence_convergence_hub import AriaIntelligenceConvergenceHub
+                overrides = AriaIntelligenceConvergenceHub().generate_convergence_overrides()
+                if overrides.get("interaction_mode") == "SILENT":
+                    print("[ProactiveCognition] Low receptiveness detected. Silent mode active. Suppressing suggestions.")
+                    return None
+            except Exception as e:
+                print(f"[ProactiveCognition] Silent override check error: {e}")
+
             # 1. Check Guest Mode (silence proactively in guest mode)
             username = getattr(aria_instance, "known_user", None) or "friend"
             if username.lower() == "guest":

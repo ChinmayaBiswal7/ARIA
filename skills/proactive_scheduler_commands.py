@@ -22,6 +22,9 @@ def run_background_scheduler(aria):
     """Proactive background scheduler that checks battery levels, break suggestions, and database reminders."""
     last_battery_check_time = 0
     last_break_check_time = time.time()
+    last_memory_maintenance_time = time.time()
+    last_career_check_time = time.time()
+    last_learning_update_time = 0
     
     print("[ARIA Scheduler] Proactive Background Loop successfully running.")
     
@@ -214,6 +217,36 @@ def run_background_scheduler(aria):
             except Exception as ref_err:
                 print(f"[ARIA Scheduler] Idle reflection error: {ref_err}")
 
+            # 5.5. Memory maintenance decay & compression pass (every 24 hours)
+            if now - last_memory_maintenance_time > 86400:
+                last_memory_maintenance_time = now
+                print("[MemoryMaintenance] Running daily decay and compression pass...")
+                try:
+                    username = aria.known_user or "chinmaya"
+                    aria.episodic_memory.decay_pass(username)
+                    print("[MemoryMaintenance] Decay pass complete.")
+                    aria.episodic_memory.compress_old_episodes(username)
+                    print("[MemoryMaintenance] Compression pass complete.")
+                except Exception as e:
+                    print(f"[MemoryMaintenance] Error during maintenance: {repr(e)}")
+
+            # 5.6. Career/DSA daily checks (every 24 hours)
+            if now - last_career_check_time > 86400:
+                last_career_check_time = now
+                try:
+                    from skills.career_agent import CareerAgent
+                    CareerAgent().check_daily_metrics(aria)
+                except Exception as ce_err:
+                    print(f"[CareerScheduler] Error running daily career/DSA checks: {ce_err}")
+
+            # 5.7. Learning Core daily update + decay (every 24 hours)
+            if now - last_learning_update_time > 86400:
+                last_learning_update_time = now
+                try:
+                    run_daily_learning_update(aria)
+                except Exception as l_err:
+                    print(f"[LearningScheduler] Error running daily learning update: {l_err}")
+
             # 6. Dashboard Telemetry — push relationship & proactive status
             try:
                 from dashboard import CognitionState
@@ -317,3 +350,114 @@ def executor_queue_worker(aria):
         except Exception as e:
             print(f"[ARIA Queue] Error executing queued task: {e}")
             time.sleep(1.0)
+
+
+def run_daily_learning_update(aria):
+    """
+    Triggers the Continuous Learning Engine updates:
+    1. Pulls KnowledgeGraph summary (GitHub details, voice details, etc.)
+    2. Pulls Codeforces stats
+    3. Pulls career opportunities outcomes
+    4. Pulls ARIA usage patterns
+    5. Fuses signals and runs daily decay
+    6. Syncs profile snapshot to Firestore
+    """
+    print("[LearningCore] Starting daily user profile learning update...")
+    try:
+        from skills.learning_core import AriaLearningCore
+        from skills.knowledge_graph import KnowledgeGraph
+        from skills.career_agent import CareerAgent
+        from skills.firebase_sync import sync_profile_to_firestore
+        from dashboard import CognitionState
+        
+        lc = AriaLearningCore()
+        kg = KnowledgeGraph()
+        ca = CareerAgent()
+        
+        # 1. GitHub signal ingestion (reads from KG nodes)
+        lc.ingest_github_signal(aria, kg)
+        
+        # 2. Codeforces signal ingestion
+        username = "chinmaya"
+        try:
+            # Query preferences if stored
+            with ca._get_connection() as conn:
+                row = conn.execute("SELECT value FROM user_preferences WHERE key = 'codeforces_username'").fetchone()
+                if row:
+                    username = row['value']
+        except Exception:
+            pass
+        cf_stats = ca.get_codeforces_stats(username)
+        lc.ingest_codeforces_signal(aria, cf_stats)
+        
+        # 3. Career signal ingestion
+        # Query career outcomes updated in the last 24h
+        now = time.time()
+        one_day_ago = now - 86400
+        try:
+            with ca._get_connection() as conn:
+                rows = conn.execute("""
+                    SELECT role, status FROM career_opportunities 
+                    WHERE updated_at >= ?
+                """, (one_day_ago,)).fetchall()
+                for r in rows:
+                    role = r["role"]
+                    status = r["status"]
+                    # Map status/outcome
+                    outcome = None
+                    if status in ["interview", "interviewing"]:
+                        outcome = "INTERVIEW"
+                    elif status in ["offered", "offer"]:
+                        outcome = "OFFER"
+                    elif status in ["rejected"]:
+                        outcome = "REJECTED"
+                    elif status in ["ghosted"]:
+                        outcome = "GHOSTED"
+                        
+                    if outcome:
+                        # Map role to role_type
+                        role_lower = role.lower()
+                        role_type = "swe"
+                        if "backend" in role_lower:
+                            role_type = "backend"
+                        elif "frontend" in role_lower:
+                            role_type = "frontend"
+                        elif "ml" in role_lower or "ai" in role_lower or "machine learning" in role_lower:
+                            role_type = "ml"
+                        lc.ingest_career_signal(aria, role_type, outcome)
+        except Exception as e:
+            print(f"[LearningCore] Career signal ingest failed: {e}")
+            
+        # 4. Usage signal ingestion (from episodic memory logs in the last 24h)
+        try:
+            em = aria.episodic_memory
+            recent_episodes = em.get_recent(username="chinmaya", n=50)
+            topics = []
+            for ep in recent_episodes:
+                # Extract words/topics from user message
+                text = ep.get("event_text", "")
+                for kw in ["python", "kotlin", "java", "javascript", "typescript", "c++", "rust", "go", "backend", "frontend", "ml", "ai", "competitive programming", "dsa", "sql"]:
+                    if kw in text.lower():
+                        topics.append(kw)
+            if topics:
+                lc.ingest_usage_signal(topics)
+        except Exception as e:
+            print(f"[LearningCore] Usage signal ingest failed: {e}")
+
+        # 5. Run decay
+        lc.run_daily_decay()
+        
+        # 6. Retrieve snapshot and update dashboard state
+        snapshot = lc.get_profile_snapshot()
+        foci = lc.get_current_focus()
+        snapshot["current_focus"] = foci
+        
+        # Push to FastAPI state
+        CognitionState.profile_insights = snapshot
+        
+        # 7. Sync to Firestore
+        sync_profile_to_firestore(snapshot)
+        print("[LearningCore] Daily user profile learning update completed successfully.")
+        
+    except Exception as ex:
+        print(f"[LearningCore] Error in run_daily_learning_update: {ex}")

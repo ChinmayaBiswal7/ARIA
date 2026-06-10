@@ -34,6 +34,7 @@ class TestDevanagariTranslation(unittest.TestCase):
         aria.reflection_engine = MagicMock()
         aria.reflection_engine.get_relationship_vector.return_value = {"trust": 10.0}
         aria.automation_mode = False
+        aria.image_gen_mode = False
         
         # Mock emotional detection
         aria._get_current_emotion = MagicMock(return_value="neutral")

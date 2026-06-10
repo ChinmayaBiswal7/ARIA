@@ -53,14 +53,17 @@ class VisionLearner:
         # YOLO
         self.yolo = None
         if _YOLO_AVAILABLE:
-            try:
-                self.yolo = _YOLO("yolov8n.pt")   # auto-downloads ~6 MB on first run
-                print("[Vision] YOLOv8n loaded.")
-            except Exception as e:
-                print(f"[Vision] YOLO load failed: {e}")
+            def _load_yolo():
+                try:
+                    self.yolo = _YOLO("yolov8n.pt")   # auto-downloads ~6 MB on first run
+                    print("[Vision] YOLOv8n loaded.")
+                except Exception as e:
+                    print(f"[Vision] YOLO load failed: {e}")
+            threading.Thread(target=_load_yolo, daemon=True).start()
         else:
             print("[Vision] ultralytics not installed — using feature matching only.")
             print("[Vision]  To enable YOLO: pip install ultralytics")
+
 
         self.mode = "both" # "object", "face", or "both"
         self.face_mem = None # will be set by ARIA instance

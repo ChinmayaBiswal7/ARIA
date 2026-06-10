@@ -79,6 +79,7 @@ class CognitionState:
     presence_state = "USER_LEFT"
     # Live subsystem health (populated by HEALTH singleton in skills/subsystem_health.py)
     subsystem_health: dict = {}
+    profile_insights: dict = {}
 
 app = FastAPI(title="ARIA Control Center")
 
@@ -279,6 +280,81 @@ def set_mode(data: ModeUpdate):
         return {"status": "success", "mode": CognitionState.mode}
     return {"status": "error", "message": "Invalid mode"}
 
+@app.get("/api/orchestration/campaigns")
+def get_campaigns():
+    import sqlite3
+    db_path = "aria_orchestrator.db"
+    if not os.path.exists(db_path):
+        return []
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM campaigns ORDER BY created_at DESC")
+        data = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return data
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/orchestration/campaign/{campaign_id}/tasks")
+def get_campaign_tasks(campaign_id: str):
+    import sqlite3
+    db_path = "aria_orchestrator.db"
+    if not os.path.exists(db_path):
+        return []
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM agent_tasks WHERE campaign_id = ? ORDER BY created_at ASC", (campaign_id,))
+        tasks = [dict(row) for row in cursor.fetchall()]
+        
+        for t in tasks:
+            cursor.execute("SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?", (t["id"],))
+            t["depends_on"] = [r[0] for r in cursor.fetchall()]
+            
+            cursor.execute("SELECT result_payload, confidence FROM agent_results WHERE task_id = ?", (t["id"],))
+            res_row = cursor.fetchone()
+            if res_row:
+                t["result"] = res_row[0]
+                t["confidence"] = res_row[1]
+            else:
+                t["result"] = None
+                t["confidence"] = None
+        conn.close()
+        return tasks
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/orchestration/campaign/{campaign_id}/artifacts")
+def get_campaign_artifacts(campaign_id: str):
+    import sqlite3
+    db_path = "aria_orchestrator.db"
+    if not os.path.exists(db_path):
+        return []
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM campaign_artifacts WHERE campaign_id = ? ORDER BY id ASC", (campaign_id,))
+        artifacts = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return artifacts
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/orchestration/blackboard")
+def get_blackboard(topic: str = None):
+    from skills.blackboard import AriaBlackboard
+    bb = AriaBlackboard()
+    return bb.get_all(topic=topic)
+
+@app.get("/api/profile/insights")
+def get_profile_insights():
+    """Returns the Continuous Learning Engine profile insights snapshot."""
+    return CognitionState.profile_insights
+
 @app.get("/api/health")
 def get_subsystem_health():
     """Returns live runtime health states for all ARIA subsystems."""
@@ -317,6 +393,86 @@ def get_screenshot():
         return Response(content=img_bytes, media_type="image/png")
     except Exception:
         return Response(status_code=500)
+
+from typing import Optional
+
+class OpportunityCreate(BaseModel):
+    company: str
+    role: str
+    location: Optional[str] = None
+    apply_link: Optional[str] = None
+    deadline: Optional[str] = None
+    source_type: Optional[str] = "MANUAL"
+
+class StatusUpdate(BaseModel):
+    status: str
+
+class MatchRequest(BaseModel):
+    description: str
+
+@app.get("/api/career/opportunities")
+def api_get_opportunities():
+    from skills.career_agent import CareerAgent
+    try:
+        return CareerAgent().get_opportunities()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/career/opportunities")
+def api_create_opportunity(opp: OpportunityCreate):
+    from skills.career_agent import CareerAgent
+    try:
+        opp_id = CareerAgent().add_opportunity(
+            company=opp.company,
+            role=opp.role,
+            location=opp.location,
+            apply_link=opp.apply_link,
+            deadline=opp.deadline,
+            source_type=opp.source_type
+        )
+        return {"status": "success", "id": opp_id}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/career/opportunities/{opp_id}/status")
+def api_update_opportunity_status(opp_id: int, status_data: StatusUpdate):
+    from skills.career_agent import CareerAgent
+    try:
+        success = CareerAgent().update_opportunity(opp_id, {"status": status_data.status})
+        return {"status": "success" if success else "error"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/career/stats")
+def api_get_career_stats():
+    from skills.career_agent import CareerAgent
+    try:
+        agent = CareerAgent()
+        github_user = "chinmaya"
+        codeforces_user = "chinmaya"
+        with agent._get_connection() as conn:
+            row = conn.execute("SELECT value FROM user_preferences WHERE key = 'github_username'").fetchone()
+            if row: github_user = row['value']
+            row = conn.execute("SELECT value FROM user_preferences WHERE key = 'codeforces_username'").fetchone()
+            if row: codeforces_user = row['value']
+        
+        cf = agent.get_codeforces_stats(codeforces_user)
+        gh = agent.get_github_stats(github_user)
+        
+        return {
+            "codeforces": cf,
+            "github": gh
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/career/match")
+def api_match_resume(req: MatchRequest):
+    from skills.career_agent import CareerAgent
+    try:
+        return CareerAgent().match_resume_to_job(req.description)
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
@@ -419,6 +575,38 @@ def serve_dashboard():
                 <h2 class="text-sm font-semibold tracking-wider text-red-400 uppercase font-mono">Failure Analytics</h2>
                 <div id="failure-analytics-list" class="flex flex-col gap-2 text-xs font-mono">
                     <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No stability events recorded.</div>
+                </div>
+            </div>
+
+            <!-- Recent Diagnostics (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-rose-500 uppercase font-mono">Recent Diagnostics</h2>
+                <div id="recent-diagnostics-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No active system failures.</div>
+                </div>
+            </div>
+
+            <!-- Recent Root Causes (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-fuchsia-500 uppercase font-mono">Recent Root Causes</h2>
+                <div id="recent-rootcauses-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No root causes diagnosed.</div>
+                </div>
+            </div>
+
+            <!-- Recent Patch Plans (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Recent Patch Plans</h2>
+                <div id="recent-patchplans-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patch plans proposed.</div>
+                </div>
+            </div>
+
+            <!-- Recent Patches (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-violet-400 uppercase font-mono">Recent Patches</h2>
+                <div id="recent-patches-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patches generated.</div>
                 </div>
             </div>
 
@@ -557,10 +745,55 @@ def serve_dashboard():
             </div>
 
             <!-- Memory Hits -->
-            <div class="glass p-5 rounded-2xl flex-grow flex flex-col gap-3 min-h-[300px]">
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3 max-h-[200px] overflow-hidden">
                 <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Cognitive Memory Hits</h2>
-                <div id="memory-list" class="flex flex-col gap-2 overflow-y-auto max-h-[350px] pr-2 text-xs font-mono text-gray-400">
+                <div id="memory-list" class="flex flex-col gap-2 overflow-y-auto max-h-[130px] pr-2 text-xs font-mono text-gray-400">
                     <div class="p-3 rounded bg-white/5 border border-white/5 italic text-gray-500">No active memory references queried in this step.</div>
+                </div>
+            </div>
+
+            <!-- Career & Coding Tracker -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
+                <div class="flex justify-between items-center border-b border-white/5 pb-2">
+                    <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Career & DSA Tracker</h2>
+                    <div class="flex gap-2">
+                        <button onclick="openMatchModal()" class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[10px] border border-purple-500/30 hover:bg-purple-500/30 transition-all font-mono">MATCH RESUME</button>
+                        <button onclick="openAddJobModal()" class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] border border-cyan-500/30 hover:bg-cyan-500/30 transition-all font-mono">+ ADD JOB</button>
+                    </div>
+                </div>
+
+                <!-- Stats Widgets -->
+                <div class="grid grid-cols-2 gap-2 text-[10px] font-mono text-gray-400">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 flex flex-col gap-1">
+                        <span class="text-gray-500 text-[8px]">GITHUB STREAK</span>
+                        <div id="gh-streak" class="text-emerald-400 font-bold text-xs truncate">Loading...</div>
+                        <div id="gh-weekly" class="text-[8px] text-gray-500 truncate">commits last 7d</div>
+                    </div>
+                    <div class="p-2 rounded bg-white/5 border border-white/5 flex flex-col gap-1">
+                        <span class="text-gray-500 text-[8px]">CODEFORCES</span>
+                        <div id="cf-rating" class="text-purple-400 font-bold text-xs truncate">Loading...</div>
+                        <div id="cf-rank" class="text-[8px] text-gray-500 truncate font-mono">rank info</div>
+                    </div>
+                </div>
+
+                <!-- Opportunities List -->
+                <div class="overflow-x-auto max-h-[180px]">
+                    <table class="w-full text-[11px] font-mono text-left">
+                        <thead>
+                            <tr class="text-gray-500 border-b border-white/5">
+                                <th class="pb-1.5 font-semibold">Company</th>
+                                <th class="pb-1.5 font-semibold">Role</th>
+                                <th class="pb-1.5 font-semibold">Status</th>
+                                <th class="pb-1.5 font-semibold">Score</th>
+                                <th class="pb-1.5 font-semibold text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="career-opportunities-list">
+                            <tr>
+                                <td colspan="5" class="py-3 text-center text-gray-500 italic">No job tracking entries.</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </section>
@@ -740,6 +973,285 @@ def serve_dashboard():
                     console.error("Failures fetch error:", e);
                 }
 
+                // Update Recent Diagnostics List (Blackboard)
+                try {
+                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
+                    const diags = await diagRes.json();
+                    const diagList = document.getElementById("recent-diagnostics-list");
+                    
+                    let items = [];
+                    if (diags && diags.system) {
+                        // Gather keys starting with failure_
+                        items = Object.keys(diags.system)
+                            .filter(k => k.startsWith("failure_"))
+                            .map(k => diags.system[k].value);
+                    }
+                    
+                    // Sort items by timestamp descending
+                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                    
+                    if (items.length > 0) {
+                        diagList.innerHTML = items.map(item => {
+                            let sevColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+                            if (item.severity === "HIGH") {
+                                sevColor = "text-red-400 bg-red-500/10 border-red-500/20";
+                            } else if (item.severity === "MEDIUM") {
+                                sevColor = "text-amber-400 bg-amber-500/10 border-amber-500/20";
+                            }
+                            
+                            const filename = item.failed_file ? item.failed_file.split(/[\\/]/).pop() : "unknown.py";
+                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
+                            
+                            return `
+                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-bold text-gray-200 truncate max-w-[150px]" title="${item.failed_file}">${filename}</span>
+                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${sevColor}">${item.severity}</span>
+                                    </div>
+                                    <div class="text-[10px] text-gray-400 flex flex-col gap-0.5">
+                                        <div><span class="text-gray-500">Error:</span> <span class="text-rose-300 font-semibold">${item.error_type}</span></div>
+                                        <div><span class="text-gray-500">Line:</span> ${item.failed_line} | <span class="text-gray-500">Func:</span> ${item.failed_function}</div>
+                                        <div class="truncate text-gray-500" title="${item.error_message}">${item.error_message}</div>
+                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
+                                            <span>${item.campaign_id}</span>
+                                            <span>${dateStr}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join("");
+                    } else {
+                        diagList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No active system failures.</div>`;
+                    }
+                } catch(e) {
+                    console.error("Diagnostics fetch error:", e);
+                }
+
+                // Update Recent Root Causes List (Blackboard)
+                try {
+                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
+                    const diags = await diagRes.json();
+                    const rcList = document.getElementById("recent-rootcauses-list");
+                    
+                    let items = [];
+                    if (diags && diags.system) {
+                        // Gather keys starting with rootcause_
+                        items = Object.keys(diags.system)
+                            .filter(k => k.startsWith("rootcause_"))
+                            .map(k => diags.system[k].value);
+                    }
+                    
+                    // Sort items by timestamp descending
+                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                    
+                    if (items.length > 0) {
+                        rcList.innerHTML = items.map(item => {
+                            let sevColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+                            const confPct = Math.round(item.confidence * 100);
+                            if (confPct >= 85) {
+                                sevColor = "text-red-400 bg-red-500/10 border-red-500/20";
+                            } else if (confPct >= 65) {
+                                sevColor = "text-amber-400 bg-amber-500/10 border-amber-500/20";
+                            }
+                            
+                            const filename = item.failed_file ? item.failed_file.split(/[\\/]/).pop() : "unknown.py";
+                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
+                            const evidenceList = (item.evidence || []).map(e => `<li class="list-disc ml-3.5 mt-0.5 leading-snug">• ${e}</li>`).join("");
+                            
+                            return `
+                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-bold text-gray-200 truncate max-w-[150px]" title="${item.failed_file}">${filename}</span>
+                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${sevColor}">Conf: ${confPct}%</span>
+                                    </div>
+                                    <div class="text-[10px] text-gray-400 flex flex-col gap-1">
+                                        <div><span class="text-gray-500">Category:</span> <span class="text-fuchsia-300 font-semibold font-mono">${item.fix_category}</span></div>
+                                        <div class="text-gray-300"><span class="text-gray-500">Cause:</span> ${item.root_cause}</div>
+                                        <div class="text-emerald-350 bg-emerald-950/20 border border-emerald-800/10 p-1.5 rounded mt-1 font-sans text-[9px] leading-snug">
+                                            <span class="font-bold uppercase tracking-wider text-emerald-400">Strategy:</span> ${item.recommended_strategy}
+                                        </div>
+                                        ${evidenceList ? `
+                                        <div class="mt-1 border-t border-white/5 pt-1 text-[9px] text-gray-500">
+                                            <span class="font-semibold text-gray-400">Evidence:</span>
+                                            <ul class="flex flex-col gap-0.5 mt-0.5 pl-1 leading-snug">
+                                                ${evidenceList}
+                                            </ul>
+                                        </div>
+                                        ` : ''}
+                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
+                                            <span>${item.campaign_id}</span>
+                                            <span>${dateStr}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join("");
+                    } else {
+                        rcList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No root causes diagnosed.</div>`;
+                    }
+                } catch(e) {
+                    console.error("Root causes fetch error:", e);
+                }
+
+                // Update Recent Patch Plans List (Blackboard)
+                try {
+                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
+                    const diags = await diagRes.json();
+                    const planList = document.getElementById("recent-patchplans-list");
+                    
+                    let items = [];
+                    if (diags && diags.system) {
+                        items = Object.keys(diags.system)
+                            .filter(k => k.startsWith("patchplan_"))
+                            .map(k => diags.system[k].value);
+                    }
+                    
+                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                    
+                    if (items.length > 0) {
+                        planList.innerHTML = items.map(item => {
+                            const filename = item.failed_file ? item.failed_file.split(/[\\/]/).pop() : "unknown.py";
+                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
+                            let typeColor = "text-cyan-400 bg-cyan-500/10 border-cyan-500/20";
+                            if (item.edit_type === "INSERT") {
+                                typeColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+                            } else if (item.edit_type === "DELETE") {
+                                typeColor = "text-rose-400 bg-rose-500/10 border-rose-500/20";
+                            }
+                            
+                            return `
+                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-bold text-gray-200 truncate max-w-[150px]" title="${item.failed_file}">${filename}</span>
+                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${typeColor}">${item.edit_type}</span>
+                                    </div>
+                                    <div class="text-[10px] text-gray-400 flex flex-col gap-1">
+                                        <div>
+                                            <span class="text-gray-500">Scope:</span> <span class="text-amber-400 font-mono font-bold">${item.estimated_scope || "LINE"}</span>
+                                            | <span class="text-gray-500">Target Func:</span> <span class="text-cyan-300 font-mono">${item.target_function}</span>
+                                        </div>
+                                        <div><span class="text-gray-500">Location:</span> <span class="text-gray-350">${item.target_location}</span></div>
+                                        <div class="text-gray-300"><span class="text-gray-500">Goal:</span> ${item.goal}</div>
+                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
+                                            <span>${item.campaign_id}</span>
+                                            <span>${dateStr}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join("");
+                    } else {
+                        planList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patch plans proposed.</div>`;
+                    }
+                } catch(e) {
+                    console.error("Patch plans fetch error:", e);
+                }
+
+                // Update Recent Patches List (Blackboard)
+                try {
+                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
+                    const diags = await diagRes.json();
+                    const patchList = document.getElementById("recent-patches-list");
+                    
+                    let items = [];
+                    if (diags && diags.system) {
+                        items = Object.keys(diags.system)
+                            .filter(k => k.startsWith("patch_"))
+                            .map(k => diags.system[k].value);
+                    }
+                    
+                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                    
+                    if (items.length > 0) {
+                        patchList.innerHTML = items.map(item => {
+                            const filename = item.target_file ? item.target_file.split(/[\\/]/).pop() : "unknown.py";
+                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
+                            
+                            let riskColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+                            if (item.risk_level === "CRITICAL") {
+                                riskColor = "text-red-500 bg-red-600/10 border-red-650/20 font-extrabold animate-pulse";
+                            } else if (item.risk_level === "HIGH") {
+                                riskColor = "text-red-400 bg-red-500/10 border-red-500/20";
+                            } else if (item.risk_level === "MEDIUM") {
+                                riskColor = "text-amber-400 bg-amber-500/10 border-amber-500/20";
+                            }
+                            
+                            const confPct = Math.round(item.confidence * 100);
+                            const rcConf = item.confidence_source ? Math.round(item.confidence_source.root_cause * 100) : 0;
+                            const staticConf = item.confidence_source ? Math.round(item.confidence_source.static_checks * 100) : 0;
+                            const llmConf = item.confidence_source ? Math.round(item.confidence_source.llm_patch * 100) : 0;
+                            
+                            const linesStr = (item.affected_lines || []).join(", ");
+                            
+                            // Escape HTML in code snippets to avoid rendering issues
+                            const escapeHtml = (str) => (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                            const origEscaped = escapeHtml(item.original_snippet);
+                            const propEscaped = escapeHtml(item.proposed_snippet);
+                            
+                            return `
+                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-bold text-gray-200 truncate max-w-[140px]" title="${item.target_file}">${filename}</span>
+                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${riskColor}">${item.risk_level} RISK</span>
+                                    </div>
+                                    <div class="text-[10px] text-gray-400 flex flex-col gap-1">
+                                        <div>
+                                            <span class="text-gray-500">Type:</span> <span class="text-violet-350 font-semibold font-mono">${item.patch_type}</span>
+                                            ${linesStr ? ` | <span class="text-gray-500">Lines:</span> <span class="text-gray-300 font-mono">${linesStr}</span>` : ''}
+                                        </div>
+                                        <div class="text-gray-300"><span class="text-gray-500">Rationale:</span> ${item.rationale || "None"}</div>
+                                        
+                                        <!-- Confidence breakdown -->
+                                        <div class="bg-white/5 p-1.5 rounded mt-1 border border-white/5 flex flex-col gap-1 text-[9px]">
+                                            <div class="flex justify-between text-gray-300 font-bold border-b border-white/5 pb-0.5">
+                                                <span>Combined Confidence:</span>
+                                                <span class="text-violet-400">${confPct}%</span>
+                                            </div>
+                                            <div class="grid grid-cols-3 gap-1 text-center text-gray-500 text-[8px] font-mono">
+                                                <div>
+                                                    <div class="text-gray-400 font-bold">${rcConf}%</div>
+                                                    <div>Root Cause</div>
+                                                </div>
+                                                <div>
+                                                    <div class="text-gray-400 font-bold">${staticConf}%</div>
+                                                    <div>Static</div>
+                                                </div>
+                                                <div>
+                                                    <div class="text-gray-400 font-bold">${llmConf}%</div>
+                                                    <div>LLM Patch</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Diff Snippets Preview -->
+                                        <div class="mt-1 flex flex-col gap-1 text-[9px] font-mono">
+                                            ${origEscaped ? `
+                                            <div class="bg-red-950/20 border border-red-900/10 p-1.5 rounded text-red-300 overflow-x-auto max-h-[60px]">
+                                                <div class="text-[8px] text-red-500 font-bold border-b border-red-900/20 pb-0.5 mb-0.5">- ORIGINAL</div>
+                                                <pre class="leading-tight">${origEscaped}</pre>
+                                            </div>` : ''}
+                                            ${propEscaped ? `
+                                            <div class="bg-emerald-950/20 border border-emerald-900/10 p-1.5 rounded text-emerald-300 overflow-x-auto max-h-[80px]">
+                                                <div class="text-[8px] text-emerald-500 font-bold border-b border-emerald-900/20 pb-0.5 mb-0.5">+ PROPOSED</div>
+                                                <pre class="leading-tight">${propEscaped}</pre>
+                                            </div>` : ''}
+                                        </div>
+
+                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
+                                            <span>${item.campaign_id}</span>
+                                            <span>${dateStr}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join("");
+                    } else {
+                        patchList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patches generated.</div>`;
+                    }
+                } catch(e) {
+                    console.error("Patches fetch error:", e);
+                }
+
                 // Update Attention Triage Ticker
                 if (state.pending_notifications) {
                     const triList = document.getElementById("triage-notifications-list");
@@ -882,6 +1394,9 @@ def serve_dashboard():
                     noImgLbl.classList.remove("hidden");
                 }
                 
+                // Fetch career stats and opportunities
+                await fetchCareerData();
+                
             } catch(e) {
                 console.error("Dashboard fetch error:", e);
             }
@@ -911,10 +1426,241 @@ def serve_dashboard():
             });
         }
 
+        // Career functions
+        async function fetchCareerData() {
+            try {
+                // 1. Fetch coding/dsa stats
+                const statsRes = await fetch("/api/career/stats");
+                const stats = await statsRes.json();
+                
+                
+                if (stats.github && !stats.github.error) {
+                    document.getElementById("gh-streak").innerText = stats.github.streak + " Days";
+                    document.getElementById("gh-weekly").innerText = stats.github.weekly_commits + " commits last 7d";
+                } else {
+                    document.getElementById("gh-streak").innerText = "0 Days";
+                    document.getElementById("gh-weekly").innerText = stats.github?.error || "API failed";
+                }
+                
+                if (stats.codeforces && !stats.codeforces.error) {
+                    document.getElementById("cf-rating").innerText = stats.codeforces.rating + " Rating";
+                    document.getElementById("cf-rank").innerText = `${stats.codeforces.rank} (max ${stats.codeforces.max_rating})`;
+                } else {
+                    document.getElementById("cf-rating").innerText = "Unrated";
+                    document.getElementById("cf-rank").innerText = stats.codeforces?.error || "API failed";
+                }
+                
+                // 2. Fetch opportunities list
+                const oppsRes = await fetch("/api/career/opportunities");
+                const opps = await oppsRes.json();
+                const oppsList = document.getElementById("career-opportunities-list");
+                
+                if (opps && opps.length > 0) {
+                    oppsList.innerHTML = opps.map(o => {
+                        const scoreText = o.match_score !== null ? `${Math.round(o.match_score)}%` : "N/A";
+                        const linkHtml = o.apply_link ? `<a href="${o.apply_link}" target="_blank" class="text-cyan-400 hover:underline">Apply</a>` : "N/A";
+                        
+                        return `
+                            <tr class="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                <td class="py-2 text-white font-semibold">${o.company}</td>
+                                <td class="py-2 text-gray-300">${o.role}</td>
+                                <td class="py-2">
+                                    <select onchange="updateJobStatus(${o.id}, this.value)" class="bg-black/50 border border-white/10 rounded px-1 text-[10px] text-gray-300 focus:outline-none">
+                                        <option value="bookmarked" ${o.status === 'bookmarked' ? 'selected' : ''}>Bookmarked</option>
+                                        <option value="applied" ${o.status === 'applied' ? 'selected' : ''}>Applied</option>
+                                        <option value="interviewing" ${o.status === 'interviewing' ? 'selected' : ''}>Interviewing</option>
+                                        <option value="rejected" ${o.status === 'rejected' ? 'selected' : ''}>Rejected</option>
+                                        <option value="offered" ${o.status === 'offered' ? 'selected' : ''}>Offered</option>
+                                    </select>
+                                </td>
+                                <td class="py-2 text-purple-400 font-bold">${scoreText}</td>
+                                <td class="py-2 text-right">${linkHtml}</td>
+                            </tr>
+                        `;
+                    }).join("");
+                } else {
+                    oppsList.innerHTML = `<tr><td colspan="5" class="py-3 text-center text-gray-500 italic">No job tracking entries.</td></tr>`;
+                }
+            } catch (e) {
+                console.error("Error fetching career data:", e);
+            }
+        }
+        
+        async function updateJobStatus(oppId, newStatus) {
+            try {
+                await fetch(`/api/career/opportunities/${oppId}/status`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                fetchCareerData();
+            } catch (e) {
+                console.error("Error updating job status:", e);
+            }
+        }
+        
+        function openAddJobModal() {
+            document.getElementById("add-job-modal").classList.remove("hidden");
+        }
+        
+        function closeAddJobModal() {
+            document.getElementById("add-job-modal").classList.add("hidden");
+            document.getElementById("job-company").value = "";
+            document.getElementById("job-role").value = "";
+            document.getElementById("job-location").value = "";
+            document.getElementById("job-link").value = "";
+            document.getElementById("job-deadline").value = "";
+        }
+        
+        async function submitJob() {
+            const company = document.getElementById("job-company").value.trim();
+            const role = document.getElementById("job-role").value.trim();
+            if (!company || !role) {
+                alert("Company and Role are required.");
+                return;
+            }
+            const location = document.getElementById("job-location").value;
+            const link = document.getElementById("job-link").value;
+            const deadline = document.getElementById("job-deadline").value;
+            
+            try {
+                await fetch("/api/career/opportunities", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        company: company,
+                        role: role,
+                        location: location,
+                        apply_link: link,
+                        deadline: deadline
+                    })
+                });
+                closeAddJobModal();
+                fetchCareerData();
+            } catch (e) {
+                console.error("Error submitting job:", e);
+            }
+        }
+        
+        function openMatchModal() {
+            document.getElementById("match-modal").classList.remove("hidden");
+        }
+        
+        function closeMatchModal() {
+            document.getElementById("match-modal").classList.add("hidden");
+            document.getElementById("match-description").value = "";
+            document.getElementById("match-results-box").classList.add("hidden");
+        }
+        
+        async function runMatch() {
+            const desc = document.getElementById("match-description").value.trim();
+            if (!desc) {
+                alert("Please enter a job description.");
+                return;
+            }
+            
+            document.getElementById("match-loading").classList.remove("hidden");
+            document.getElementById("btn-run-match").disabled = true;
+            document.getElementById("match-results-box").classList.add("hidden");
+            
+            try {
+                const res = await fetch("/api/career/match", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ description: desc })
+                });
+                const data = await res.json();
+                
+                document.getElementById("match-result-score").innerText = (data.match_score || 0) + "%";
+                document.getElementById("match-result-matching").innerText = (data.matching_skills || []).join(", ") || "None";
+                document.getElementById("match-result-gaps").innerText = (data.gaps || []).join(", ") || "None";
+                document.getElementById("match-result-recs").innerText = (data.recommendations || []).join(", ") || "None";
+                
+                document.getElementById("match-results-box").classList.remove("hidden");
+            } catch (e) {
+                console.error("Error running match:", e);
+                alert("Match evaluation failed.");
+            } finally {
+                document.getElementById("match-loading").classList.add("hidden");
+                document.getElementById("btn-run-match").disabled = false;
+            }
+        }
+
         // Poll API every 2 seconds
         setInterval(fetchState, 2000);
         window.onload = fetchState;
     </script>
+
+    <!-- Add Job Modal -->
+    <div id="add-job-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass max-w-md w-full p-6 rounded-2xl flex flex-col gap-4 border border-cyan-500/20">
+            <h3 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Bookmark Job Opportunity</h3>
+            <div class="flex flex-col gap-3 text-xs">
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Company Name</label>
+                    <input type="text" id="job-company" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Google">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Role Title</label>
+                    <input type="text" id="job-role" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Software Engineer Intern">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Location</label>
+                    <input type="text" id="job-location" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Mountain View, CA">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Apply Link URL</label>
+                    <input type="text" id="job-link" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="https://careers.google.com/...">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Deadline (YYYY-MM-DD)</label>
+                    <input type="text" id="job-deadline" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. 2026-10-31">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 text-xs font-mono mt-2">
+                <button onclick="closeAddJobModal()" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-gray-300">Cancel</button>
+                <button onclick="submitJob()" class="px-3 py-1.5 rounded bg-cyan-500 text-black font-semibold">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Match Resume Modal -->
+    <div id="match-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass max-w-lg w-full p-6 rounded-2xl flex flex-col gap-4 border border-purple-500/20">
+            <h3 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">LLM Resume Matcher</h3>
+            <div class="flex flex-col gap-3 text-xs">
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Target Job Description</label>
+                    <textarea id="match-description" rows="6" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-purple-500 resize-none" placeholder="Paste the job description or requirements here..."></textarea>
+                </div>
+                <div id="match-results-box" class="hidden p-3 rounded bg-white/5 border border-white/5 flex flex-col gap-2 font-mono">
+                    <div class="flex justify-between font-bold">
+                        <span>MATCH SCORE:</span>
+                        <span id="match-result-score" class="text-purple-400">0%</span>
+                    </div>
+                    <div class="text-[10px]">
+                        <span class="text-emerald-400 font-semibold">MATCHING:</span>
+                        <div id="match-result-matching" class="text-gray-300 mt-0.5 font-sans"></div>
+                    </div>
+                    <div class="text-[10px] mt-1">
+                        <span class="text-red-400 font-semibold">GAPS:</span>
+                        <div id="match-result-gaps" class="text-gray-300 mt-0.5 font-sans"></div>
+                    </div>
+                    <div class="text-[10px] mt-1">
+                        <span class="text-amber-400 font-semibold">RECOMMENDATIONS:</span>
+                        <div id="match-result-recs" class="text-gray-300 mt-0.5 font-sans"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-between items-center text-xs font-mono mt-2">
+                <span id="match-loading" class="hidden text-purple-300 animate-pulse">Deliberating...</span>
+                <div class="flex justify-end gap-2 ml-auto">
+                    <button onclick="closeMatchModal()" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-gray-300">Close</button>
+                    <button id="btn-run-match" onclick="runMatch()" class="px-3 py-1.5 rounded bg-purple-500 text-white font-semibold">Run Match</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)

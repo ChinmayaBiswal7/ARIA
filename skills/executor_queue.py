@@ -11,7 +11,7 @@ import threading
 from typing import Dict, Any, List, Optional, Tuple
 
 class TaskItem:
-    def __init__(self, task_id: str, goal: str, priority: int):
+    def __init__(self, task_id: str, goal: str, priority: int, agent_name: Optional[str] = None, target: Optional[str] = None):
         self.task_id = task_id
         self.goal = goal
         self.base_priority = priority  # 1 (Highest) to 10 (Lowest)
@@ -19,6 +19,8 @@ class TaskItem:
         self.wait_ticks = 0
         self.cancelled = False
         self.running = False
+        self.agent_name = agent_name
+        self.target = target
 
     @property
     def dynamic_priority(self) -> float:
@@ -43,9 +45,9 @@ class ExecutorQueue:
         self._lock = threading.Lock()
         self._active_task: Optional[TaskItem] = None
 
-    def add_task(self, task_id: str, goal: str, priority: int = 5) -> TaskItem:
+    def add_task(self, task_id: str, goal: str, priority: int = 5, agent_name: Optional[str] = None, target: Optional[str] = None) -> TaskItem:
         """Adds a task to the queue."""
-        item = TaskItem(task_id, goal, priority)
+        item = TaskItem(task_id, goal, priority, agent_name, target)
         with self._lock:
             heapq.heappush(self._queue, item)
             print(f"[ExecutorQueue] Enqueued task '{goal}' (priority: {priority}, id: {task_id})")
@@ -114,7 +116,9 @@ class ExecutorQueue:
                     "goal": t.goal,
                     "base_priority": t.base_priority,
                     "dynamic_priority": round(t.dynamic_priority, 1),
-                    "cancelled": t.cancelled
+                    "cancelled": t.cancelled,
+                    "agent_name": t.agent_name,
+                    "target": t.target
                 }
                 for t in sorted(self._queue)
             ]

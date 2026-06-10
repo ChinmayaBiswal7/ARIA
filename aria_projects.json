@@ -21,18 +21,18 @@
       ],
       "pending_tasks": [
         {
-          "task_name": "Knowledge graph integration",
-          "estimated_hours": 10,
-          "is_blocking": false
-        },
-        {
           "task_name": "Face confidence tuning",
           "estimated_hours": 2,
           "is_blocking": false,
           "impact": 8
+        },
+        {
+          "task_name": "Knowledge graph integration",
+          "estimated_hours": 10,
+          "is_blocking": false
         }
       ],
-      "last_worked_on": "2026-06-03",
+      "last_worked_on": "2026-06-06",
       "current_focus": "Native Android STT",
       "last_session_summary": "Finished phone routing and integrated face diagnostics safely.",
       "next_action": "Implement Android SpeechRecognizer bridge inside native Kotlin wrapper.",

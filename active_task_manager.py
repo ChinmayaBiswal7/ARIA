@@ -29,6 +29,25 @@ except ImportError:
     ARIAEvents = None
 
 
+def sync_active_task(task) -> None:
+    """Syncs the active task state to Firestore active_tasks/latest."""
+    try:
+        import firebase_admin
+        from firebase_admin import firestore
+        if firebase_admin._apps:
+            db = firestore.client()
+            if task:
+                db.collection("active_tasks").document("latest").set(task.to_dict())
+            else:
+                try:
+                    db.collection("active_tasks").document("latest").delete()
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[ActiveTaskManager] Firestore sync failed: {e}")
+
+
+
 def _emit(event_type: str, **kwargs) -> None:
     """Publish a typed event. No-op if EventBus is unavailable."""
     if _bus and ARIAEvents:
@@ -140,6 +159,7 @@ class ActiveTask:
         print(f"[ActiveTask] Step {step.step_number}: {action} {target or ''}")
         _emit(ARIAEvents.STEP_STARTED, task_id=self.task_id, step_id=step.step_number, action=action,
               status=step.status)
+        sync_active_task(self)
         return step
 
     def complete_step(self, result: Optional[str] = None):
@@ -151,6 +171,7 @@ class ActiveTask:
             print(f"[ActiveTask] Step {self.current_step_index} completed (duration: {step.duration:.2f}s)")
             _emit(ARIAEvents.STEP_COMPLETED, task_id=self.task_id, step_id=step.step_number,
                   action=step.action, result=result, duration=step.duration)
+            sync_active_task(self)
 
     def add_object(self, obj: TaskObject) -> TaskObject:
         """Add a referenced object (result, element, tab, etc.)."""
@@ -179,6 +200,7 @@ class ActiveTask:
         self.result = result
         self.last_updated = time.time()
         print(f"[ActiveTask] Result set: {result[:100]}")
+        sync_active_task(self)
 
     def start_running(self):
         """Transition task to RUNNING status."""
@@ -186,6 +208,7 @@ class ActiveTask:
         self.last_updated = time.time()
         print(f"[ActiveTask] Task running: {self.goal}")
         _emit(ARIAEvents.TASK_STARTED, task_id=self.task_id, goal=self.goal, status=self.status)
+        sync_active_task(self)
 
     def pause_task(self):
         """Pause task execution (transitions to INTERRUPTED)."""
@@ -193,6 +216,7 @@ class ActiveTask:
         self.last_updated = time.time()
         print(f"[ActiveTask] Task interrupted: {self.goal}")
         _emit(ARIAEvents.TASK_INTERRUPTED, task_id=self.task_id, goal=self.goal, status=self.status)
+        sync_active_task(self)
 
     def resume_task(self):
         """Resume task execution (transitions back to RUNNING)."""
@@ -200,6 +224,7 @@ class ActiveTask:
         self.last_updated = time.time()
         print(f"[ActiveTask] Task resumed: {self.goal}")
         _emit(ARIAEvents.TASK_RESUMED, task_id=self.task_id, goal=self.goal, status=self.status)
+        sync_active_task(self)
 
     def wait_task(self):
         """Put task in waiting state."""
@@ -207,6 +232,7 @@ class ActiveTask:
         self.last_updated = time.time()
         print(f"[ActiveTask] Task waiting: {self.goal}")
         _emit(ARIAEvents.TASK_WAITING, task_id=self.task_id, goal=self.goal, status=self.status)
+        sync_active_task(self)
 
     def cancel_task(self):
         """Cancel task execution."""
@@ -216,6 +242,7 @@ class ActiveTask:
         self.last_updated = time.time()
         print(f"[ActiveTask] Task cancelled: {self.goal}")
         _emit(ARIAEvents.TASK_CANCELLED, task_id=self.task_id, goal=self.goal, status=self.status, duration=self.duration)
+        sync_active_task(self)
 
     def complete_task(self):
         """Mark task as completed."""
@@ -226,6 +253,7 @@ class ActiveTask:
         print(f"[ActiveTask] Task completed: {self.goal}")
         _emit(ARIAEvents.TASK_COMPLETED, task_id=self.task_id, goal=self.goal, status=self.status,
               result=self.result, duration=self.duration)
+        sync_active_task(self)
 
     def fail_task(self, reason: str = "", failure_type: str = "FAILED_UNKNOWN"):
         """Mark task as failed with structured failure type."""
@@ -243,6 +271,7 @@ class ActiveTask:
         print(f"[ActiveTask] Task failed: {self.goal} ({self.result})")
         _emit(ARIAEvents.TASK_FAILED, task_id=self.task_id, goal=self.goal, status=self.status,
               result=self.result, failure_type=failure_type, duration=self.duration)
+        sync_active_task(self)
 
     def abandon_task(self, reason: str = ""):
         """Mark task as abandoned (maps to CANCELLED)."""
@@ -332,6 +361,7 @@ class ActiveTaskManager:
         self.active_task = ActiveTask(goal=goal, site=site, user_input=user_input, parent_id=parent_id)
         self.active_task.start_running()
         print(f"[TaskManager] Started task: {goal}")
+        sync_active_task(self.active_task)
         return self.active_task
 
     def get_active_task(self) -> Optional[ActiveTask]:
@@ -345,6 +375,7 @@ class ActiveTaskManager:
                 self.active_task.complete_task()
             self.task_history.append(self.active_task)
             self.active_task = None
+            sync_active_task(None)
 
     def get_last_task(self, index: int = 1) -> Optional[ActiveTask]:
         """Get a previous task from history (1 = most recent)."""
@@ -359,6 +390,7 @@ class ActiveTaskManager:
             task.status = "ACTIVE"
             self.active_task = task
             print(f"[TaskManager] Resumed task: {task.goal}")
+            sync_active_task(task)
             return task
         return None
 

@@ -333,3 +333,78 @@ class UIControl:
         target_path = path.strip().strip("'\"")
         subprocess.Popen(f'code "{target_path}"', shell=True)
         return True, f"VS Code opened at path: {target_path}"
+
+
+# Whitelist configurations for Sprint P25.1
+OBSERVED_APPS = [
+    "CODE.EXE", "CHROME.EXE", "FIREFOX.EXE", "MSEDGE.EXE",
+    "TERMINAL.EXE", "POWERSHELL.EXE", "CMD.EXE",
+    "DISCORD.EXE", "SPOTIFY.EXE", "NOTEPAD.EXE"
+]
+
+UI_TREE_APPS = [
+    "CODE.EXE", "CHROME.EXE", "FIREFOX.EXE", "MSEDGE.EXE", "TERMINAL.EXE"
+]
+
+from skills.context_skill import WindowEvent
+
+def _crawl_window_tree(window_title: str) -> dict:
+    """Crawl UIA elements using pywinauto."""
+    tree = {"buttons": [], "active_tabs": [], "input_fields": []}
+    try:
+        from pywinauto import Desktop
+        desktop = Desktop(backend="uia")
+        # Find open window matching title
+        wins = desktop.windows()
+        app_win = None
+        kw = window_title.lower()
+        for w in wins:
+            try:
+                if kw in w.window_text().lower():
+                    app_win = w
+                    break
+            except Exception:
+                continue
+        
+        if app_win:
+            count = 0
+            for ctrl in app_win.descendants():
+                try:
+                    c_text = ctrl.window_text().strip()
+                    c_type = ctrl.element_info.control_type
+                    
+                    if c_type == "Button" and c_text:
+                        tree["buttons"].append(c_text)
+                    elif c_type == "TabItem" and c_text:
+                        tree["active_tabs"].append(c_text)
+                    elif c_type == "Edit" and c_text:
+                        tree["input_fields"].append(c_text)
+                        
+                    count += 1
+                    if count > 50:  # limit tree depth to prevent context/time overload
+                        break
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[ui_control] UIA crawl failed: {e}")
+    return tree
+
+def capture_desktop_perception_snapshot(pid: int, app_exe_name: str, window_title: str) -> WindowEvent:
+    """Evaluates process whitelists to run high-value UI crawls only when needed."""
+    app_tag = app_exe_name.upper().strip()
+    
+    # Check Track Tier A: Expensive accessibility crawls
+    if app_tag in UI_TREE_APPS:
+        print(f"[ui_control] UI Tree Whitelist hit ({app_tag}). Traversing structural nodes...")
+        tree_data = _crawl_window_tree(window_title)
+        return WindowEvent(pid, app_exe_name, window_title, accessibility_tree=tree_data)
+
+    # Check Track Tier B: Simple focus time tracking
+    if app_tag in OBSERVED_APPS:
+        print(f"[ui_control] Focus Tracker Whitelist hit ({app_tag}). Logging title context only.")
+        return WindowEvent(pid, app_exe_name, window_title)
+
+    # Fallback default: Skip logging/crawling entirely for unmapped background applications
+    return WindowEvent(pid, app_exe_name, window_title)
+
+

@@ -24,6 +24,7 @@ FOLDER_REMEMBER_WORDS = ["remember this folder as ", "remember folder as "]
 
 PERSONAL_BRAIN_WORDS = ["what do you know about me", "show my brain", "my brain summary", "personal brain", "what is in my brain"]
 GUIDE_ME_WORDS = ["what should i do", "what do i need to do", "what should i focus on", "guide me"]
+LAST_SESSION_WORDS = ["last session", "what did we do last", "what did we work on last time", "summary of last session", "previous session"]
 
 WORKSPACE_PREPARE_WORDS = ["prepare ml workspace", "setup coding", "start coding", "ml workspace"]
 WORKSPACE_STUDY_WORDS = ["study mode", "activate study mode", "start study", "focus mode"]
@@ -60,6 +61,17 @@ SCREEN_READ_TRIGGERS = [
     "read it out", "read this page", "read the page",
     "read the results", "read the news", "pick some latest news",
     "summarize the screen", "summarise the screen"
+]
+
+SCREEN_TRIAGE_TRIGGERS = [
+    "what error is on my screen", "what error on screen", "what's wrong with my code",
+    "explain this error", "explain the error", "fix the bug on my screen", "fix this bug",
+    "fix error on my screen", "why is my code crashing", "what is crashing", "debug my screen"
+]
+
+COGNITIVE_PLANNING_TRIGGERS = [
+    "help me study for", "help me prepare for", "study plan for", "plan the goal",
+    "help me finish my", "orchestrate task", "create a study plan"
 ]
 
 SMART_CLICK_TRIGGERS = [
@@ -196,3 +208,13 @@ AR_ACTIVE_ONLY_TRIGGERS = {
     "object": ["object mode", "interact mode"],
     "ar3d": ["3d mode", "hologram mode", "ar3d mode", "ar3d"]
 }
+
+FEEDBACK_NEGATIVE_WORDS = [
+    "stop", "quiet", "shut up", "be quiet", "don't talk", 
+    "no suggestions", "go away", "ignore", "annoying", "mute", "dismiss"
+]
+
+FEEDBACK_POSITIVE_WORDS = [
+    "thanks", "thank you", "sure", "yes", "do it", 
+    "do that", "okay", "ok", "helpful", "cool", "i will"
+]
