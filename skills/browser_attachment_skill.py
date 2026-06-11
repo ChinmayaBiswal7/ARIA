@@ -129,8 +129,17 @@ def _extract_domain(url: str) -> str:
 
 
 def _is_protected(url: str) -> bool:
-    """Return True if the URL matches any protected domain pattern."""
+    """
+    Return True if the URL matches any protected domain pattern,
+    OR if the URL is a browser error/internal page (chrome-error://, about:, etc.).
+    Error pages are clamped to DENIED because they represent unresolvable destinations
+    where the true target domain cannot be verified.
+    """
     lower_url = url.lower()
+    # Clamp error and internal pages to DENIED — destination unverifiable
+    ERROR_SCHEMES = ("chrome-error://", "chrome://", "about:", "edge://", "data:", "javascript:")
+    if any(lower_url.startswith(s) for s in ERROR_SCHEMES):
+        return True
     return any(p in lower_url for p in PROTECTED_DOMAIN_PATTERNS)
 
 
@@ -338,7 +347,7 @@ class AriaBrowserAttachmentSkill:
                             continue
             finally:
                 # Detach only — never close the user's browser
-                browser.disconnect()
+                browser.close()
         return tabs
 
     # ── Private: Mock adapter ──────────────────────────────────────────────
@@ -383,8 +392,10 @@ class AriaBrowserAttachmentSkill:
                 tab_id = _stable_tab_id(url, title)
                 domain = _extract_domain(url)
 
-                # Determine correct default permission
-                if _is_protected(url):
+                # Determine correct default permission.
+                # Also deny tabs with no parseable hostname (unresolvable navigation artifacts).
+                parsed_host = _extract_domain(url)
+                if _is_protected(url) or not parsed_host or "." not in parsed_host:
                     default_perm = PERM_DENIED
                 else:
                     default_perm = PERM_ASK

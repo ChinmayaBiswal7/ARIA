@@ -1,0 +1,62 @@
+{
+  "name": "aria-vscode-bridge",
+  "displayName": "ARIA VS Code Bridge",
+  "description": "Sends active editor state (file, selection, diagnostics, git branch) to your local ARIA instance via HTTP.",
+  "version": "0.1.0",
+  "publisher": "ChinmayaBiswal7",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aria.syncState",
+        "title": "ARIA: Sync Workspace State"
+      },
+      {
+        "command": "aria.startBridge",
+        "title": "ARIA: Start VS Code Bridge"
+      },
+      {
+        "command": "aria.stopBridge",
+        "title": "ARIA: Stop VS Code Bridge"
+      }
+    ],
+    "configuration": {
+      "title": "ARIA VS Code Bridge",
+      "properties": {
+        "aria.bridgeUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:9821",
+          "description": "URL of the running ARIA bridge HTTP server."
+        },
+        "aria.syncIntervalSeconds": {
+          "type": "number",
+          "default": 5,
+          "description": "How often (in seconds) to push workspace state to ARIA. Set to 0 to disable automatic sync."
+        },
+        "aria.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable the ARIA VS Code Bridge."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}

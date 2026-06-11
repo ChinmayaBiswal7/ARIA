@@ -2584,3 +2584,111 @@ def handle_chrome_cdp(aria, inp, user_input, image=None):
 
     return {"handled": False}
 
+
+def handle_vscode_bridge(aria, inp, user_input, image=None):
+    """
+    Routes VS Code Intelligence Bridge commands (Sprint P25.4) through AriaVsCodeBridgeSkill.
+    """
+    clean = inp.lower().strip()
+
+    VSCODE_TRIGGERS = [
+        "workspace status", "vscode status", "code status",
+        "workspace summary", "vscode summary", "code summary",
+        "active file", "what file", "current file",
+        "code errors", "diagnostics", "workspace errors",
+        "my selection", "selected code",
+        "start vscode bridge", "start code bridge",
+        "bridge status", "vscode bridge"
+    ]
+    if not any(t in clean for t in VSCODE_TRIGGERS):
+        return {"handled": False}
+
+    if not hasattr(aria, "vscode_bridge_server") or aria.vscode_bridge_server is None:
+        from skills.vscode_bridge_skill import AriaVsCodeBridgeServer
+        db_path = getattr(aria, "db_path", "aria_orchestrator.db")
+        aria.vscode_bridge_server = AriaVsCodeBridgeServer(db_path=db_path)
+
+    if not hasattr(aria, "vscode_bridge_skill") or aria.vscode_bridge_skill is None:
+        from skills.vscode_bridge_skill import AriaVsCodeBridgeSkill
+        db_path = getattr(aria, "db_path", "aria_orchestrator.db")
+        aria.vscode_bridge_skill = AriaVsCodeBridgeSkill(db_path=db_path, server=aria.vscode_bridge_server)
+
+    server = aria.vscode_bridge_server
+    skill = aria.vscode_bridge_skill
+
+    # Lazy start the server for status/query commands if not already running
+    if not server.is_running() and not any(t in clean for t in ["bridge status", "vscode bridge"]):
+        server.start()
+
+    # ── start vscode bridge / start code bridge ───────────────────────────
+    if "start vscode bridge" in clean or "start code bridge" in clean:
+        success = server.start()
+        if success:
+            msg = "VS Code Bridge HTTP server started on http://127.0.0.1:9821."
+            aria._speak("VS Code bridge is now running.")
+        else:
+            msg = "Failed to start VS Code Bridge (is Flask installed?)."
+            aria._speak("I failed to start the VS Code bridge.")
+        return {"handled": True, "action": "vscode_bridge", "response": msg}
+
+    # ── bridge status / vscode bridge ─────────────────────────────────────
+    if any(t in clean for t in ["bridge status", "vscode bridge"]):
+        is_alive = skill.is_bridge_server_alive()
+        status_str = "active and listening on http://127.0.0.1:9821" if is_alive else "offline (not running)"
+        msg = f"VS Code Bridge is currently {status_str}."
+        aria._speak(f"VS Code bridge is {'active' if is_alive else 'offline'}.")
+        return {"handled": True, "action": "vscode_bridge", "response": msg}
+
+    # ── workspace status / vscode status / code status / summary ──────────
+    if any(t in clean for t in ["workspace status", "vscode status", "code status", "workspace summary", "vscode summary", "code summary"]):
+        summary = skill.format_workspace_summary()
+        snap = skill.get_workspace_snapshot()
+        if snap:
+            import os
+            filename = os.path.basename(snap.get("active_file", "")) if snap.get("active_file") else "no file"
+            aria._speak(f"VS Code status: active file is {filename}.")
+        else:
+            aria._speak("No active VS Code workspace data is available yet.")
+        return {"handled": True, "action": "vscode_bridge", "response": summary}
+
+    # ── active file / what file / current file ───────────────────────────
+    if any(t in clean for t in ["active file", "what file", "current file"]):
+        active = skill.get_active_file()
+        if active:
+            msg = f"The active file in VS Code is:\n`{active}`"
+            import os
+            aria._speak(f"The active file is {os.path.basename(active)}.")
+        else:
+            msg = "No active file is currently reported by VS Code."
+            aria._speak("No active file is open in VS Code.")
+        return {"handled": True, "action": "vscode_bridge", "response": msg}
+
+    # ── code errors / diagnostics / workspace errors ─────────────────────
+    if any(t in clean for t in ["code errors", "diagnostics", "workspace errors"]):
+        sev = "ERROR" if "error" in clean else None
+        diags = skill.get_diagnostics(limit=20, severity=sev)
+        if not diags:
+            msg = "No diagnostics were reported for the active file."
+            aria._speak("No workspace errors reported.")
+        else:
+            lines = ["### VS Code Diagnostics Log\n"]
+            for d in diags:
+                lines.append(f"- **{d['severity']}** | `{d['file_name']}` (line {d['line_number']}): {d['message']}")
+            msg = "\n".join(lines)
+            aria._speak(f"Found {len(diags)} diagnostics in the log.")
+        return {"handled": True, "action": "vscode_bridge", "response": msg}
+
+    # ── my selection / selected code ──────────────────────────────────────
+    if any(t in clean for t in ["my selection", "selected code"]):
+        selection = skill.get_selection()
+        if selection:
+            msg = f"Current VS Code selection:\n```\n{selection}\n```"
+            aria._speak("Here is your current selection in VS Code.")
+        else:
+            msg = "No text is currently selected in VS Code."
+            aria._speak("No text is currently selected in VS Code.")
+        return {"handled": True, "action": "vscode_bridge", "response": msg}
+
+    return {"handled": False}
+
+

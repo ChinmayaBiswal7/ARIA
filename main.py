@@ -1990,7 +1990,7 @@ class ARIA:
             handle_vision, handle_rag_search, handle_code_search,
             handle_architecture_query, handle_research_query, handle_task_planning,
             handle_gesture_monitoring, handle_personal_coach, handle_self_improvement,
-            handle_desktop_control, handle_chrome_cdp
+            handle_desktop_control, handle_chrome_cdp, handle_vscode_bridge
         )
 
         image_param = image
@@ -2079,6 +2079,9 @@ class ARIA:
         if res.get("handled"):
             return
         res = handle_chrome_cdp(self, inp, user_input, image=image_param)
+        if res.get("handled"):
+            return
+        res = handle_vscode_bridge(self, inp, user_input, image=image_param)
         if res.get("handled"):
             return
         res = handle_chief_of_staff(self, inp, user_input, image=image_param)
