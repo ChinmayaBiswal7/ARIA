@@ -187,6 +187,7 @@ class ARIA:
         self.last_interaction_time = 0.0
         self.conversation_session = ConversationSession(timeout_seconds=60.0)
         self._was_in_conversation = False
+        self.sentinel_wake_triggered = False
         self._reply_context = threading.local()
         self.pending_browser_action = None
         self.shopping_search_context = {}
@@ -2552,41 +2553,13 @@ Provide only the bullet points in the summary, with no other text, introduction,
                 return (
                     getattr(self, 'state', None) in ("LISTENING", "THINKING", "TRANSCRIBING")
                     or (self.voice is not None and getattr(self.voice, 'is_speaking', False))
+                    or getattr(self, "sentinel_wake_triggered", False)
                 )
             
             # Wake Callback
             def on_wake_triggered():
-                print("\n[WakeSentinel] Wake word detected locally! Transitioning to LISTENING.")
-                self.state = "LISTENING"
-                set_state("LISTENING")
-                
-                # Play chime if voice is initialized
-                if self.voice:
-                    try:
-                        self.voice.play_audio_file("assets/wake_chime.wav")
-                    except Exception as play_err:
-                        print(f"[WakeSentinel] Chime playback failed: {play_err}")
-                
-                # Mark interaction time to initialize/open active window
-                self._mark_conversation_activity(wake_reason="wake_word")
-                self._was_in_conversation = True
-                
-                # Start a non-blocking dialog turn thread
-                def run_dialog_turn():
-                    set_text("Go ahead, I am listening...")
-                    self.assistant_replied = False
-                    user_input = self.voice.listen(timeout=8, phrase_time_limit=15, active_conversation=True)
-                    if user_input and self.running:
-                        if self.voice.is_valid_speech(user_input, active_conversation=True):
-                            self._handle_input(user_input)
-                        else:
-                            if not getattr(self, "assistant_replied", False):
-                                self._speak("I am listening, go ahead.")
-                    else:
-                        if not getattr(self, "assistant_replied", False):
-                            self._speak("I am listening, go ahead.")
-                
-                threading.Thread(target=run_dialog_turn, daemon=True).start()
+                print("\n[WakeSentinel] Wake word detected locally! Signaling main loop to listen.")
+                self.sentinel_wake_triggered = True
 
             self.wake_sentinel = AriaWakeSentinel(system_state_provider=is_system_busy)
             if self.wake_sentinel.model is not None:
@@ -2768,6 +2741,35 @@ Provide only the bullet points in the summary, with no other text, introduction,
                             set_state("IDLE")
                             set_text("Say 'Hey ARIA' to activate...")
                             if self.wake_sentinel and self.wake_sentinel_thread and self.wake_sentinel_thread.is_alive():
+                                if getattr(self, "sentinel_wake_triggered", False):
+                                    self.sentinel_wake_triggered = False
+                                    set_state("LISTENING")
+                                    print("[ARIA] Wake word triggered by sentinel thread. Activating dialogue turn...")
+                                    
+                                    # Play chime
+                                    if self.voice:
+                                        try:
+                                            self.voice.play_audio_file("assets/wake_chime.wav")
+                                        except Exception as play_err:
+                                            print(f"[ARIA] Chime playback failed: {play_err}")
+
+                                    self._mark_conversation_activity(wake_reason="wake_word")
+                                    self._was_in_conversation = True
+                                    self.assistant_replied = False
+
+                                    set_text("Go ahead, I am listening...")
+                                    user_input = self.voice.listen(timeout=8, phrase_time_limit=15, active_conversation=True)
+                                    if user_input and self.running:
+                                        if self.voice.is_valid_speech(user_input, active_conversation=True):
+                                            self._handle_input(user_input)
+                                        else:
+                                            if not getattr(self, "assistant_replied", False):
+                                                self._speak("I am listening, go ahead.")
+                                    else:
+                                        if not getattr(self, "assistant_replied", False):
+                                            self._speak("I am listening, go ahead.")
+                                    continue
+
                                 time.sleep(0.2)
                                 continue
                             detected = self.voice.listen_for_wake_word(self.WAKE_WORDS, timeout=3)

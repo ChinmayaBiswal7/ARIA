@@ -34,6 +34,7 @@ class Voice:
         self.recognizer.energy_threshold = 200       # Lower base threshold
         self.recognizer.dynamic_energy_threshold = False # Disable dynamic (prevents hanging)
         self.energy_rms_threshold = 300              # Lower initial base RMS threshold
+        self.mic_lock = threading.Lock()
         self.microphone = None
         self._init_mic()
         self.noise_profile = None
@@ -90,14 +91,28 @@ class Voice:
         avg_logprob = getattr(self, 'last_avg_logprob', None)
         no_speech_prob = getattr(self, 'last_no_speech_prob', None)
 
+        # Calculate a trust score metric: 1.0 is highest trust, 0.0 is lowest trust
+        trust_score = 1.0
+        if avg_logprob is not None:
+            import math
+            trust_score = math.exp(max(avg_logprob, -3.0))
+        if no_speech_prob is not None:
+            trust_score = trust_score * (1.0 - no_speech_prob)
+
+        avg_logprob_str = f"{avg_logprob:.3f}" if avg_logprob is not None else "None"
+        no_speech_prob_str = f"{no_speech_prob:.3f}" if no_speech_prob is not None else "None"
+        print(f"[STT Trust Score] {trust_score:.2f} (avg_logprob: {avg_logprob_str}, no_speech_prob: {no_speech_prob_str})")
+
         # 1. Global Whisper Confidence Triage
         # Reject highly uncertain segments that are likely static, AC hum or breath noises
         if avg_logprob is not None and avg_logprob < -1.00:
             print(f"[VoiceFilter] Filtered out transcript '{text}' due to low confidence (avg_logprob: {avg_logprob:.3f} < -1.00)")
+            print(f"[STT Verification] REJECTED: '{text}' (reason: low_avg_logprob)")
             return False
             
         if no_speech_prob is not None and no_speech_prob > 0.45:
             print(f"[VoiceFilter] Filtered out transcript '{text}' due to high no-speech probability (no_speech_prob: {no_speech_prob:.3f} > 0.45)")
+            print(f"[STT Verification] REJECTED: '{text}' (reason: high_no_speech_prob)")
             return False
 
         # 1b. Strict common/suspicious Whisper hallucination filter
@@ -108,9 +123,11 @@ class Voice:
         if clean_phrase in COMMON_HALLUCINATIONS:
             if avg_logprob is not None and avg_logprob < -0.55:
                 print(f"[VoiceFilter] Filtered out suspicious common hallucination '{text}' due to low avg_logprob ({avg_logprob:.3f} < -0.55)")
+                print(f"[STT Verification] REJECTED: '{text}' (reason: low_logprob_common_hallucination)")
                 return False
             if no_speech_prob is not None and no_speech_prob > 0.15:
                 print(f"[VoiceFilter] Filtered out suspicious common hallucination '{text}' due to high no_speech_prob ({no_speech_prob:.3f} > 0.15)")
+                print(f"[STT Verification] REJECTED: '{text}' (reason: high_no_speech_common_hallucination)")
                 return False
 
         SHORT_PHRASE_GUARD = {
@@ -155,10 +172,12 @@ class Voice:
                 
             if not is_valid:
                 print(f"[VoiceFilter] Filtered out short phrase '{text}' due to: {', '.join(reasons)}")
+                print(f"[STT Verification] REJECTED: '{text}' (reason: short_phrase_guard_failed)")
                 return False
 
         valid, reason = is_valid_speech_text(text, active_conversation=active_conversation)
         if valid:
+            print(f"[STT Verification] ACCEPTED: '{text}' (reason: {reason})")
             return True
         if reason == 'static_silence_hallucination':
             print(f'[VoiceFilter] Filtered out static/silence hallucination: \'{text}\'')
@@ -166,7 +185,9 @@ class Voice:
             print(f'[VoiceFilter] Filtered out ultra-short noise: \'{text}\'')
         elif reason == 'single_word_ambient_noise':
             print(f'[VoiceFilter] Filtered out single-word ambient noise: \'{text}\'')
+        print(f"[STT Verification] REJECTED: '{text}' (reason: {reason})")
         return False
+
             
     def denoise_audio(self, audio_data):
         try:
@@ -358,7 +379,7 @@ class Voice:
         import numpy as np
         print('[Voice] Calibrating noise profile — please stay silent...')
         try:
-            with self.microphone as source:
+            with self.mic_lock, self.microphone as source:
                 sample_rate = source.SAMPLE_RATE
                 frame_ms = 30
                 source_samples = int(sample_rate * frame_ms / 1000)
@@ -656,7 +677,7 @@ class Voice:
         original_volume = None
         
         try:
-            with self.microphone as source:
+            with self.mic_lock, self.microphone as source:
                 sample_rate = source.SAMPLE_RATE
                 sample_width = source.SAMPLE_WIDTH
                 vad_rate = 16000
@@ -1111,7 +1132,7 @@ class Voice:
             print('[Voice] No microphone available.')
             return None
         try:
-            with self.microphone as source:
+            with self.mic_lock, self.microphone as source:
                 print('[STATUS] Listening...')
                 audio = self._record_audio_chunked(source, timeout=timeout, phrase_time_limit=phrase_time_limit, active_conversation=active_conversation)
                 if audio is None:
@@ -1168,7 +1189,7 @@ class Voice:
             if not self.microphone:
                 return None
             try:
-                with self.microphone as source:
+                with self.mic_lock, self.microphone as source:
                     sample_rate = source.SAMPLE_RATE
                     chunk_ms = 80
                     chunk_samples = int(sample_rate * chunk_ms / 1000)
@@ -1220,7 +1241,7 @@ class Voice:
         if not self.microphone:
             return None
         try:
-            with self.microphone as source:
+            with self.mic_lock, self.microphone as source:
                 audio = self._record_audio_chunked(source, timeout=timeout, phrase_time_limit=5, active_conversation=False)
                 if audio is None:
                     return None
