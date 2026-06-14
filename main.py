@@ -234,6 +234,7 @@ class ARIA:
         # ── Voice / TTS ─────────────────────────────────────────────────────
         try:
             self.voice = Voice()
+            self.voice.aria = self
             self.voice.on_speech_detected = self.reset_interaction_timeout
             HEALTH.mark_healthy(SUBSYSTEM_TTS, "Voice initialized")
             HEALTH.mark_healthy(SUBSYSTEM_MICROPHONE, "Microphone ready")
@@ -380,6 +381,17 @@ class ARIA:
             server_thread = threading.Thread(target=run_server, daemon=True)
             server_thread.start()
             print("[ARIA Observability] Dashboard active at http://127.0.0.1:8000")
+            
+            def auto_open_dashboard():
+                time.sleep(2.5) # Wait for server to bind
+                try:
+                    import webbrowser
+                    webbrowser.open("http://127.0.0.1:8000")
+                    print("[AmbientDashboard] Automatically opened dashboard in browser.")
+                except Exception as open_err:
+                    print(f"[AmbientDashboard] Failed to auto-open dashboard: {open_err}")
+            
+            threading.Thread(target=auto_open_dashboard, daemon=True).start()
         except Exception as e:
             print(f"[ARIA Observability] Could not start dashboard: {e}")
 
@@ -963,6 +975,14 @@ class ARIA:
             print(f"[PresenceEngine] State Transition: {getattr(self, 'last_presence_state_logged', 'None')} -> {state} (Time since owner: {time_since_owner:.1f}s)")
             self.last_presence_state_logged = state
             
+            if state == "OWNER_ACTIVE" and not self.conversation_session.is_active():
+                try:
+                    from skills.ambient_dashboard_controller import AmbientDashboardController
+                    controller = AmbientDashboardController()
+                    controller.set_tab("AMBIENT")
+                except Exception as ambient_err:
+                    print(f"[PresenceEngine] Failed to set tab to AMBIENT on transition: {ambient_err}")
+            
         return state
 
     def _run_face_wake_loop(self):
@@ -971,9 +991,14 @@ class ARIA:
         import time
         while self.running:
             try:
-                # Yield CPU priorities: If voice session is active, slow down checking frequency
-                if self.voice and (self.voice.is_speaking or getattr(self.voice, "vad_detecting_speech", False)):
-                    time.sleep(3.0)
+                # Yield CPU priorities: If voice session or listening is active, slow down checking frequency
+                if self.voice and (
+                    self.voice.is_speaking
+                    or getattr(self.voice, "vad_detecting_speech", False)
+                    or getattr(self.voice, "recording_active", False)
+                    or (hasattr(self.voice, "listening_active") and self.voice.listening_active.is_set())
+                ):
+                    time.sleep(5.0)
                     continue
 
                 # Check if camera is available and we are NOT in active conversation
@@ -1034,9 +1059,14 @@ class ARIA:
 
     def _run_background_perception(self):
         """Runs periodic background webcam scans to detect presence and emotions."""
-        # Yield CPU priorities: If voice session is active, delay check and return immediately
-        if self.voice and (self.voice.is_speaking or getattr(self.voice, "vad_detecting_speech", False)):
-            self.last_background_perception_time = time.time() - 50.0  # check again in 10s (slow poll) instead of 60s
+        # Yield CPU priorities: If voice session or listening is active, delay check and return immediately
+        if self.voice and (
+            self.voice.is_speaking
+            or getattr(self.voice, "vad_detecting_speech", False)
+            or getattr(self.voice, "recording_active", False)
+            or (hasattr(self.voice, "listening_active") and self.voice.listening_active.is_set())
+        ):
+            self.last_background_perception_time = time.time() - 40.0  # check again in 20s (slow poll) instead of 60s
             return
 
         self.last_background_perception_time = time.time()
@@ -1196,6 +1226,14 @@ class ARIA:
         while self.running:
             try:
                 time.sleep(3.0)
+                if self.voice and (
+                    self.voice.is_speaking
+                    or getattr(self.voice, "recording_active", False)
+                    or getattr(self.voice, "vad_detecting_speech", False)
+                    or (hasattr(self.voice, "listening_active") and self.voice.listening_active.is_set())
+                ):
+                    time.sleep(2.0)
+                    continue
                 
                 # Check active projects JSON
                 projects_file = "aria_projects.json"
@@ -1497,11 +1535,50 @@ class ARIA:
                                         
                     if matched_cards:
                         result_text = "\n".join(matched_cards)
-                        print(f"[Search/Scraper] Cricbuzz matched match cards:\n{result_text}")
-                        return f"Live cricket match scorecard details:\n{result_text}"
+                        # Only return Cricbuzz data if it has real score data
+                        # (runs/wickets), not just pre-match state ("opt to bowl").
+                        has_score_data = any(
+                            any(tok in card.lower() for tok in ["runs", "wickets", "/", "won by", "beat"])
+                            for card in matched_cards
+                        )
+                        if has_score_data:
+                            print(f"[Search/Scraper] Cricbuzz matched match cards:\n{result_text}")
+                            return f"Live cricket match scorecard details:\n{result_text}"
+                        else:
+                            print(f"[Search/Scraper] Cricbuzz cards found but no score data yet. Google fallback...")
+                    else:
+                        print(f"[Search/Scraper] Cricbuzz returned no matching cards. Google fallback...")
+
+                    # Google fallback — targeted live score search when Cricbuzz lacks data
+                    try:
+                        google_terms = target_tokens if target_tokens else ["cricket"]
+                        google_query = " ".join(google_terms) + " live score cricket today"
+                        encoded_gq = urllib.parse.quote(google_query)
+                        google_url = f"https://www.google.com/search?q={encoded_gq}&hl=en"
+                        print(f"[Search/Scraper] Google cricket fallback: {google_query}")
+                        gres = requests.get(google_url, headers=headers, timeout=8)
+                        if gres.status_code == 200:
+                            gsoup = BeautifulSoup(gres.text, "html.parser")
+                            for tag in gsoup(["script", "style", "noscript"]):
+                                tag.decompose()
+                            gtext = " ".join(gsoup.get_text(separator=" ", strip=True).split())
+                            score_idx = -1
+                            for score_word in ["runs", "wickets", "inning", "over", "batting", "bowling"]:
+                                idx = gtext.lower().find(score_word)
+                                if idx != -1:
+                                    score_idx = max(0, idx - 200)
+                                    break
+                            if score_idx != -1:
+                                snippet = gtext[score_idx : score_idx + 600]
+                                print(f"[Search/Scraper] Google cricket fallback: score snippet found.")
+                                return f"Live cricket score (Google):\n{snippet}"
+                            else:
+                                print(f"[Search/Scraper] Google fallback: no score terms found in page.")
+                    except Exception as gfb_err:
+                        print(f"[Search/Scraper] Google cricket fallback error: {gfb_err}")
+
             except Exception as e:
                 print(f"[Search/Scraper] Cricbuzz live scores fetch error: {e}")
-
         # 2. Try Tavily Search API
         try:
             from skills.api_integrations import APIIntegrations
@@ -1687,9 +1764,37 @@ class ARIA:
 
         return False
 
+    def is_dangerous_command(self, command_text):
+        """Tier 3 security helper: identify dangerous commands requiring MFA (face + voice)."""
+        clean_txt = (command_text or "").strip().lower()
+        dangerous_keywords = ["shutdown", "delete memory", "run shell", "execute command", "wipe database", "factory reset"]
+        return any(kw in clean_txt for kw in dangerous_keywords)
+
     def _handle_input(self, user_input, image=None, remote=False):
         """Process one utterance from the user."""
         self.assistant_replied = True
+
+        # Check if this is a Tier 3 dangerous command
+        if self.is_dangerous_command(user_input) and not remote:
+            now = time.time()
+            face_verified = (self.known_user in ["chinmay", "chinmaya"] and (now - getattr(self, "last_identity_match_time", 0.0) < 30.0))
+            
+            voice_verified = False
+            if self.voice:
+                if self.voice.speaker_recognizer.owner_voiceprint is None:
+                    # Treat as verified if not enrolled yet to avoid deadlock
+                    print("[SecurityGuard] Voiceprint not enrolled. Face match used as fallback for dangerous command.")
+                    voice_verified = True
+                else:
+                    voice_verified = getattr(self.voice, "last_speaker_verified", False)
+            else:
+                voice_verified = True
+            
+            if not (face_verified and voice_verified):
+                print(f"[SecurityGuard] DANGEROUS command blocked: Dual-factor authentication failed. Face matched: {face_verified}, Voice matched: {voice_verified}")
+                self._speak("Access denied: Dual-factor authentication (face + voice match) is required for critical commands.", allow_barge_in=False)
+                return
+
         # Security authorization check for local inputs (microphone speech / console typing)
         if not remote:
             now = time.time()
@@ -1797,6 +1902,17 @@ class ARIA:
     def _handle_input_impl(self, user_input, image=None, source=None):
         """Process one utterance from the user."""
         self._mark_conversation_activity(wake_reason="user_input")
+
+        # Resolve active dashboard context for vague queries
+        try:
+            from skills.ambient_dashboard_controller import AmbientDashboardController
+            controller = AmbientDashboardController()
+            enriched_input = controller.resolve_context(user_input)
+            if enriched_input != user_input:
+                print(f"[Main/ContextPersistence] Enriched query: '{user_input}' -> '{enriched_input}'")
+                user_input = enriched_input
+        except Exception as ctx_err:
+            print(f"[Main/ContextPersistence] Context resolution error: {ctx_err}")
 
         # Devanagari detection and translation to English
         import re
@@ -2094,7 +2210,10 @@ class ARIA:
         if intent == "browser_search":
             from skills.browser_skill import BrowserSkill
             bs = BrowserSkill()
-            if bs.is_browser_active():
+            
+            is_explicit_browser_open = any(w in user_input.lower() for w in ["open browser", "open youtube", "open amazon", "go to", "navigate to", "click", "type"]) or any(url_suffix in query.lower() for url_suffix in [".com", ".org", ".net", ".edu", "http://", "https://"])
+            
+            if bs.is_browser_active() and is_explicit_browser_open:
                 self.automation_mode = True
                 self.last_automation_action_time = time.time()
                 set_state("THINKING")
@@ -2125,13 +2244,167 @@ class ARIA:
                 return
             else:
                 set_state("THINKING")
-                set_text("Searching Google...")
-                self._speak(f"Opening search results for {query}...")
-                import webbrowser
-                import urllib.parse
-                encoded = urllib.parse.quote(query)
-                url = f"https://www.google.com/search?q={encoded}"
-                webbrowser.open(url)
+                search_q = query or user_input
+                set_text(f"Searching for {search_q}...")
+                print(f"[Main/IntentGuard] Intercepting query for dynamic dashboard: {search_q}")
+                raw_text = self.search_and_read(search_q)
+                
+                if raw_text and not raw_text.startswith("Could not fetch"):
+                    # Truncate to prevent token overflow on Groq (causes JSON cut-off)
+                    MAX_CONTEXT = 6000
+                    if len(raw_text) > MAX_CONTEXT:
+                        raw_text = raw_text[:MAX_CONTEXT] + "\n...[truncated for brevity]"
+                    prompt = (
+                        f"The user asked/searched: '{user_input}'.\n\n"
+                        f"Here is search data from the web:\n---\n{raw_text}\n---\n\n"
+                        f"IMPORTANT: Return ONLY a compact JSON object — no prose, no markdown outside the JSON block. Keep all string values SHORT to avoid truncation.\n"
+                        f"Create a response with both a concise voice summary (1-2 sentences max, no markdown like * # **) AND a compact JSON widget payload.\n"
+                        f"You must determine the correct widget type:\n"
+                        f"- If the query is about ANY sport (cricket, football/soccer, basketball/NBA, F1/formula 1, IPL, tennis, kabaddi, hockey, rugby, etc.) — live score, result, standings, player stats — compile a SPORTS_WIDGET.\n"
+                        f"- If about news or articles, compile a NEWS_WIDGET.\n"
+                        f"- If about weather, compile a WEATHER_WIDGET.\n"
+                        f"- If about stock tickers or finance, compile a STOCK_WIDGET.\n"
+                        f"- If about a person's biography or stats (e.g. Kohli, Elon Musk), compile a PERSON_WIDGET.\n"
+                        f"- If about a retail product (e.g. Logitech MK345, iPhone), compile a PRODUCT_WIDGET.\n"
+                        f"- If about video clips, YouTube, or movie clips, compile a VIDEO_WIDGET.\n"
+                        f"- Otherwise, compile a SEARCH_WIDGET.\n\n"
+                        f"You must return ONLY a valid JSON object (enclosed in ```json ... ```) with this exact structure:\n"
+                        f'{{\n'
+                        f'  "voice_summary": "Concise text for ARIA to speak",\n'
+                        f'  "widget_payload": {{\n'
+                        f'    "view_type": "SPORTS_WIDGET | NEWS_WIDGET | WEATHER_WIDGET | STOCK_WIDGET | SEARCH_WIDGET | PERSON_WIDGET | PRODUCT_WIDGET | VIDEO_WIDGET",\n'
+                        f'    "payload": {{ ... }}\n'
+                        f'  }}\n'
+                        f'}}\n\n'
+                        f"Payload schemas:\n"
+                        f"- SPORTS_WIDGET: {{ \"sport_type\": \"cricket|football|basketball|f1|tennis|hockey|kabaddi|rugby|other\", \"match_title\": \"...\", \"status\": \"live|finished|upcoming\", \"score_string\": \"e.g. '245/6 (42.3 ov)' for cricket OR '2-1' for football OR '108-95' for NBA\", \"venue\": \"...\", \"competition\": \"e.g. IPL 2025 / Premier League / NBA Finals / F1 Monaco GP\", \"team_a\": {{ \"name\": \"...\", \"score\": \"...\", \"flag_emoji\": \"🏴󠁧󠁢󠁥󠁮󠁧󠁿\" }}, \"team_b\": {{ \"name\": \"...\", \"score\": \"...\", \"flag_emoji\": \"🇮🇳\" }}, \"key_stats\": {{ \"label\": \"value\" }}, \"batters\": [{{ \"name\": \"...\", \"runs\": \"...\", \"balls\": \"...\", \"sr\": \"...\" }}], \"bowlers\": [{{ \"name\": \"...\", \"overs\": \"...\", \"runs\": \"...\", \"wickets\": \"...\" }}], \"players\": [{{ \"name\": \"...\", \"stat\": \"...\", \"detail\": \"...\" }}], \"analytical_projections\": {{ \"current_run_rate\": \"...\", \"projected_final_score\": \"...\", \"win_probability\": \"...\" }}, \"highlights\": [\"key event 1\", \"key event 2\"], \"images\": [\"url1\"], \"buttons\": [{{ \"label\": \"Open Source\", \"url\": \"...\" }}] }}\n"
+                        f"- NEWS_WIDGET: {{ \"articles\": [ MAX 4 articles — {{ \"headline\": \"...\", \"summary\": \"1 sentence only\", \"source\": \"Name\", \"url\": \"exact URL\", \"image_url\": \"real image URL from search data or empty string\", \"category\": \"World|Politics|Tech|Sports|Business\", \"sentiment\": \"positive|negative|neutral\" }} ], \"clips\": [ MAX 2 clips — {{ \"title\": \"short title\", \"embed_url\": \"https://www.youtube.com/embed/REAL_VIDEO_ID\", \"channel\": \"Channel Name\" }} ] }}\n"
+                        f"- WEATHER_WIDGET: {{ \"location\": \"City\", \"temp\": \"...\", \"feels_like\": \"...\", \"humidity\": \"...\", \"wind_speed\": \"...\", \"desc\": \"...\", \"forecast\": [{{ \"time\": \"...\", \"temp\": \"...\", \"desc\": \"...\" }}] }}\n"
+                        f"- STOCK_WIDGET: {{ \"stocks\": [{{ \"symbol\": \"...\", \"name\": \"...\", \"price\": \"...\", \"change\": \"...\", \"pct_change\": \"...\", \"positive\": true|false }}] }}\n"
+                        f"- PERSON_WIDGET: {{ \"name\": \"...\", \"bio\": \"...\", \"images\": [\"url1\", \"url2\"], \"stats\": {{ \"Key\": \"Value\" }}, \"recent_news\": [\"news1\"], \"social_links\": [{{ \"platform\": \"...\", \"url\": \"...\" }}], \"buttons\": [{{ \"label\": \"...\", \"url\": \"...\" }}] }}\n"
+                        f"- PRODUCT_WIDGET: {{ \"name\": \"...\", \"price\": \"...\", \"images\": [\"url1\"], \"specifications\": {{ \"Key\": \"Value\" }}, \"reviews\": [\"rev1\"], \"buy_links\": [{{ \"seller\": \"Amazon\", \"price\": \"...\", \"url\": \"...\" }}], \"trend_commentary\": \"...\" }}\n"
+                        f"- VIDEO_WIDGET: {{ \"title\": \"...\", \"videos\": [{{ \"title\": \"...\", \"thumbnail\": \"...\", \"duration\": \"...\", \"url\": \"...\", \"embed_url\": \"...\", \"channel\": \"...\" }}] }}\n"
+                        f"- SEARCH_WIDGET: {{ \"query\": \"...\", \"results\": [{{ \"title\": \"...\", \"snippet\": \"...\", \"url\": \"...\", \"image_url\": \"...\" }}] }}\n"
+                    )
+                    answer = self.brain.think(prompt, user_name=self.known_user)
+                    parsed = None
+                    try:
+                        clean_ans = answer.strip()
+                        
+                        # 1. Clean markdown triple backticks
+                        if "```" in clean_ans:
+                            import re
+                            match = re.search(r"```(?:json)?\s*(.*?)\s*```", clean_ans, re.DOTALL | re.IGNORECASE)
+                            if match:
+                                clean_ans = match.group(1).strip()
+                                
+                        # 2. Strip leading "json\n" or "json\r\n" or "json " (case-insensitive)
+                        if clean_ans.lower().startswith("json\n"):
+                            clean_ans = clean_ans[5:].strip()
+                        elif clean_ans.lower().startswith("json\r\n"):
+                            clean_ans = clean_ans[6:].strip()
+                        elif clean_ans.lower().startswith("json "):
+                            clean_ans = clean_ans[5:].strip()
+                            
+                        # 3. Locate the outer-most JSON object if there is junk
+                        first_brace = clean_ans.find("{")
+                        last_brace = clean_ans.rfind("}")
+                        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                            clean_ans = clean_ans[first_brace:last_brace+1]
+                            
+                        import json
+                        parsed = json.loads(clean_ans)
+                    except Exception as e:
+                        print(f"[Main/WidgetParser] Could not parse brain output: {e}. Attempting repair...")
+                        # ── REPAIR: try to salvage truncated JSON ──
+                        # Close any open string, array, and object so json.loads can partially succeed
+                        try:
+                            import re as _re
+                            repair = clean_ans.strip()
+                            # Count unclosed quotes (odd = dangling string)
+                            if repair.count('"') % 2 == 1:
+                                repair += '"'
+                            # Close dangling arrays/objects
+                            open_b = repair.count('{') - repair.count('}')
+                            open_a = repair.count('[') - repair.count(']')
+                            # Strip trailing comma before closing
+                            repair = _re.sub(r',\s*$', '', repair.rstrip())
+                            repair += ']' * max(0, open_a) + '}' * max(0, open_b)
+                            parsed = json.loads(repair)
+                            print(f"[Main/WidgetParser] JSON repair succeeded.")
+                        except Exception as e2:
+                            print(f"[Main/WidgetParser] JSON repair also failed: {e2}. Output was:\n{answer}")
+
+                    # Normalize keys for voice_summary and widget_payload
+                    voice_reply = None
+                    widget_payload = None
+                    
+                    if isinstance(parsed, dict):
+                        # Find voice summary key
+                        for k in ["voice_summary", "voicesummary", "voiceSummary", "summary", "speech_text", "speech", "response"]:
+                            if k in parsed:
+                                voice_reply = parsed[k]
+                                break
+                        # Find widget payload key
+                        for k in ["widget_payload", "widgetpayload", "widgetPayload", "widget"]:
+                            if k in parsed:
+                                widget_payload = parsed[k]
+                                break
+                                
+                    if voice_reply and widget_payload and isinstance(widget_payload, dict):
+                        # Find view_type and payload inside widget_payload
+                        view_type = None
+                        payload_data = {}
+                        for k in ["view_type", "viewtype", "viewType", "type", "widget_type"]:
+                            if k in widget_payload:
+                                view_type = widget_payload[k]
+                                break
+                        if isinstance(view_type, str):
+                            view_type = view_type.upper().strip()
+                        for k in ["payload", "data"]:
+                            if k in widget_payload:
+                                payload_data = widget_payload[k]
+                                break
+                                
+                        try:
+                            from skills.ambient_dashboard_controller import AmbientDashboardController
+                            controller = AmbientDashboardController()
+                            controller.push_widget_payload(view_type, payload_data)
+                        except Exception as push_err:
+                            print(f"[Main/WidgetParser] Pushing widget failed: {push_err}")
+                            
+                        self._speak(voice_reply)
+                    else:
+                        # Fallback: regex search for voice_summary / voicesummary field value
+                        extracted_speech = None
+                        try:
+                            import re
+                            # Match "voice_summary": "value" or "voicesummary": "value"
+                            pattern = r'"voice_?summary"\s*:\s*"([^"]+)"'
+                            match = re.search(pattern, answer or "", re.IGNORECASE)
+                            if match:
+                                extracted_speech = match.group(1)
+                            else:
+                                # Match with single quotes or no quotes for keys
+                                pattern2 = r'\'voice_?summary\'\s*:\s*[\'"]([^\'"]+)[\'"]'
+                                match2 = re.search(pattern2, answer or "", re.IGNORECASE)
+                                if match2:
+                                    extracted_speech = match2.group(1)
+                        except Exception as regex_err:
+                            print(f"[Main/WidgetParser] Regex fallback extraction failed: {regex_err}")
+                            
+                        if extracted_speech:
+                            self._speak(extracted_speech)
+                        else:
+                            import re
+                            # Strip any raw JSON-like brackets/keys to make speech sound clean
+                            answer_clean = re.sub(r'\[[A-Z]+[:\]][^\]]*\]', '', answer or "").strip()
+                            if answer_clean.startswith("{") or "voicesummary" in answer_clean.lower() or "voice_summary" in answer_clean.lower():
+                                self._speak("I found the information but couldn't load the dashboard view.")
+                            else:
+                                self._speak(answer_clean or "I found some information but couldn't load the dashboard.")
+                else:
+                    self._speak(f"I couldn't retrieve results for {search_q} right now.")
                 return
 
         # ─ Detect current user from camera (skip if owner recently verified) ─

@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARIA Control Center</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                        mono: ['Space Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/public/control_center.css?v=1">
+</head>
+<body class="text-gray-100 min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="glass glow-blue border-b border-blue-500/20 px-8 py-4 flex justify-between items-center z-10">
+        <div class="flex items-center gap-3">
+            <div class="w-3 h-3 rounded-full bg-cyan-400 status-pulse shadow-[0_0_10px_#22d3ee]"></div>
+            <h1 class="text-2xl font-extrabold tracking-wider bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
+                ARIA CONTROL CENTER
+            </h1>
+            <a href="/design_lab.html" class="ml-4 px-3 py-1 rounded bg-cyan-500/10 border border-cyan-500/20 text-xs text-cyan-400 font-mono hover:bg-cyan-500 hover:text-black transition-all">⬡ DESIGN LAB</a>
+        </div>
+        <div class="flex items-center gap-4">
+            <span class="text-xs text-gray-400 font-mono">MODE SELECTOR:</span>
+            <div class="flex rounded-lg overflow-hidden border border-white/10 p-0.5 bg-black/40">
+                <button onclick="setMode('safe')" id="btn-safe" class="px-3 py-1 text-xs font-semibold rounded-md transition-all">SAFE</button>
+                <button onclick="setMode('auto')" id="btn-auto" class="px-3 py-1 text-xs font-semibold rounded-md transition-all">AUTO</button>
+                <button onclick="setMode('dev')" id="btn-dev" class="px-3 py-1 text-xs font-semibold rounded-md transition-all">DEV</button>
+            </div>
+            <div class="px-3 py-1 rounded bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400 font-mono" id="model-badge">
+                OLLAMA / QWEN2.5
+            </div>
+            <div class="px-3 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-xs text-amber-400 font-mono" id="profile-badge">
+                EXECUTIVE: AUTONOMOUS
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="flex-grow p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1800px] mx-auto w-full">
+        
+        <!-- Left Column: Visuals & Systems -->
+        <section class="lg:col-span-4 flex flex-col gap-6">
+            <!-- Screen Grounding Capture -->
+            <div class="glass p-5 rounded-2xl glow-blue flex flex-col gap-3">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Live Grounding Screen</h2>
+                    <span class="text-xs text-gray-500 font-mono" id="active-win-lbl">Desktop</span>
+                </div>
+                <div class="w-full aspect-[16/10] bg-black/40 rounded-lg overflow-hidden border border-white/5 relative flex items-center justify-center">
+                    <img id="screenshot-img" src="" alt="Live Desktop View" class="w-full h-full object-contain hidden" />
+                    <div id="no-screenshot-lbl" class="text-xs text-gray-500 font-mono flex flex-col items-center gap-2">
+                        <svg class="animate-pulse w-8 h-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        Awaiting vision frame...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Failure Analytics -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-red-400 uppercase font-mono">Failure Analytics</h2>
+                <div id="failure-analytics-list" class="flex flex-col gap-2 text-xs font-mono">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No stability events recorded.</div>
+                </div>
+            </div>
+
+            <!-- Recent Diagnostics (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-rose-500 uppercase font-mono">Recent Diagnostics</h2>
+                <div id="recent-diagnostics-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No active system failures.</div>
+                </div>
+            </div>
+
+            <!-- Recent Root Causes (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-fuchsia-500 uppercase font-mono">Recent Root Causes</h2>
+                <div id="recent-rootcauses-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No root causes diagnosed.</div>
+                </div>
+            </div>
+
+            <!-- Recent Patch Plans (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Recent Patch Plans</h2>
+                <div id="recent-patchplans-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patch plans proposed.</div>
+                </div>
+            </div>
+
+            <!-- Recent Patches (Blackboard) -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-violet-400 uppercase font-mono">Recent Patches</h2>
+                <div id="recent-patches-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patches generated.</div>
+                </div>
+            </div>
+
+            <!-- World State & Health Modeling -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
+                <h2 class="text-sm font-semibold tracking-wider text-emerald-400 uppercase font-mono">World State & Tool Health</h2>
+                <div class="grid grid-cols-2 gap-3 text-xs font-mono">
+                    <div class="p-2 rounded bg-white/5 border border-white/5">
+                        <span class="text-gray-500 text-[10px]">ACTIVE PROJECT</span>
+                        <div id="ws-project" class="text-emerald-400 font-semibold truncate">ARIA</div>
+                    </div>
+                    <div class="p-2 rounded bg-white/5 border border-white/5">
+                        <span class="text-gray-500 text-[10px]">BROWSER TABS</span>
+                        <div id="ws-tabs" class="text-emerald-400 font-semibold truncate">Dashboard</div>
+                    </div>
+                    <div class="p-2 rounded bg-white/5 border border-white/5">
+                        <span class="text-gray-500 text-[10px]">WORKFLOW</span>
+                        <div id="ws-workflow" class="text-emerald-400 font-semibold truncate">Idle</div>
+                    </div>
+                    <div class="p-2 rounded bg-white/5 border border-white/5">
+                        <span class="text-gray-500 text-[10px]">AGENT STATUS</span>
+                        <div id="ws-status" class="text-emerald-400 font-semibold truncate">Idle</div>
+                    </div>
+                </div>
+                
+                <div class="border-t border-white/5 pt-3 flex flex-col gap-2 text-xs font-mono">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Success Rate:</span>
+                        <span id="health-success" class="text-emerald-400 font-bold">100%</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Memory Latency:</span>
+                        <span id="health-mem-lat" class="text-cyan-400">0.01s</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Vision Latency:</span>
+                        <span id="health-vis-lat" class="text-purple-400">0.00s</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Stuck Rate:</span>
+                        <span id="health-stuck" class="text-amber-400">0%</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Passive Notification Intelligence Triage -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-amber-400 uppercase font-mono">Attention & Triage Box</h2>
+                <div id="triage-notifications-list" class="flex flex-col gap-2 overflow-y-auto max-h-[150px] text-[10px] font-mono text-gray-400 pr-1">
+                    <div class="italic text-gray-500 text-center">Triage box empty. Silent notifications are batched here during tasks.</div>
+                </div>
+            </div>
+
+            <!-- Event Bus Cognition Stream -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Cognition Event Stream</h2>
+                <div id="event-ticker-list" class="flex flex-col gap-2 overflow-y-auto max-h-[180px] text-[10px] font-mono text-gray-400 pr-1">
+                    <div class="italic text-gray-500">Awaiting bus events...</div>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
+                <h2 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">System Telemetry</h2>
+                <div class="flex flex-col gap-3">
+                    <div>
+                        <div class="flex justify-between text-xs font-mono text-gray-400 mb-1">
+                            <span>COGNITIVE LOAD</span>
+                            <span id="load-val" class="text-emerald-400 font-bold">NORMAL (0.10)</span>
+                        </div>
+                        <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden">
+                            <div id="load-bar" class="bg-gradient-to-r from-emerald-500 via-yellow-400 to-red-500 h-full transition-all duration-500" style="width: 10%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs font-mono text-gray-400 mb-1">
+                            <span>CPU USAGE</span>
+                            <span id="cpu-val">0%</span>
+                        </div>
+                        <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden">
+                            <div id="cpu-bar" class="bg-gradient-to-r from-blue-500 to-cyan-400 h-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs font-mono text-gray-400 mb-1">
+                            <span>RAM ALLOCATION</span>
+                            <span id="ram-val">0%</span>
+                        </div>
+                        <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden">
+                            <div id="ram-bar" class="bg-gradient-to-r from-purple-500 to-pink-500 h-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Middle Column: Cognition Monitor -->
+        <section class="lg:col-span-5 flex flex-col gap-6">
+            <!-- Active Goal -->
+            <div class="glass p-6 rounded-2xl glow-purple flex flex-col gap-4">
+                <div>
+                    <span class="text-[10px] font-bold tracking-widest text-purple-400 uppercase font-mono">Current Goal</span>
+                    <h2 class="text-xl font-bold tracking-tight text-white mt-1" id="goal-lbl">No active goal</h2>
+                </div>
+                
+                <div class="border-t border-white/5 pt-4">
+                    <span class="text-[10px] font-bold tracking-widest text-cyan-400 uppercase font-mono">Active Subtask / State</span>
+                    <p class="text-sm font-semibold text-gray-300 mt-1 font-mono" id="subtask-lbl">Idle</p>
+                </div>
+
+                <div class="border-t border-white/5 pt-4">
+                    <span class="text-[10px] font-bold tracking-widest text-amber-400 uppercase font-mono">Anticipatory Runtime Forecast</span>
+                    <p class="text-xs text-gray-400 mt-1 font-mono" id="forecast-lbl">No forecasts available (awaiting query...)</p>
+                </div>
+
+                <div class="border-t border-white/5 pt-4">
+                    <span class="text-[10px] font-bold tracking-widest text-emerald-400 uppercase font-mono">Deliberative Sandbox Simulation</span>
+                    <p class="text-xs text-gray-400 mt-1 font-mono" id="sandbox-lbl">No simulations active (idle...)</p>
+                </div>
+
+                <div class="flex gap-4 border-t border-white/5 pt-4">
+                    <div>
+                        <span class="text-[10px] font-bold tracking-widest text-gray-500 uppercase font-mono">Confidence</span>
+                        <div class="text-lg font-bold text-white font-mono" id="conf-lbl">1.00</div>
+                    </div>
+                    <div class="flex-grow">
+                        <span class="text-[10px] font-bold tracking-widest text-gray-500 uppercase font-mono">Self-Reflection Result</span>
+                        <p class="text-xs text-gray-400 mt-1 italic" id="reflection-lbl">No reflection logged.</p>
+                    </div>
+                </div>
+
+                <div class="border-t border-white/5 pt-4">
+                    <span class="text-[10px] font-bold tracking-widest text-red-400 uppercase font-mono">Causal Blame Diagnosis</span>
+                    <p class="text-xs text-gray-400 mt-1 font-mono text-gray-500" id="causal-lbl">No failures logged (system healthy)</p>
+                </div>
+            </div>
+
+            <!-- Memory Hits -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3 max-h-[200px] overflow-hidden">
+                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Cognitive Memory Hits</h2>
+                <div id="memory-list" class="flex flex-col gap-2 overflow-y-auto max-h-[130px] pr-2 text-xs font-mono text-gray-400">
+                    <div class="p-3 rounded bg-white/5 border border-white/5 italic text-gray-500">No active memory references queried in this step.</div>
+                </div>
+            </div>
+
+            <!-- Career & Coding Tracker -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
+                <div class="flex justify-between items-center border-b border-white/5 pb-2">
+                    <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Career & DSA Tracker</h2>
+                    <div class="flex gap-2">
+                        <button onclick="openMatchModal()" class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[10px] border border-purple-500/30 hover:bg-purple-500/30 transition-all font-mono">MATCH RESUME</button>
+                        <button onclick="openAddJobModal()" class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] border border-cyan-500/30 hover:bg-cyan-500/30 transition-all font-mono">+ ADD JOB</button>
+                    </div>
+                </div>
+
+                <!-- Stats Widgets -->
+                <div class="grid grid-cols-2 gap-2 text-[10px] font-mono text-gray-400">
+                    <div class="p-2 rounded bg-white/5 border border-white/5 flex flex-col gap-1">
+                        <span class="text-gray-500 text-[8px]">GITHUB STREAK</span>
+                        <div id="gh-streak" class="text-emerald-400 font-bold text-xs truncate">Loading...</div>
+                        <div id="gh-weekly" class="text-[8px] text-gray-500 truncate">commits last 7d</div>
+                    </div>
+                    <div class="p-2 rounded bg-white/5 border border-white/5 flex flex-col gap-1">
+                        <span class="text-gray-500 text-[8px]">CODEFORCES</span>
+                        <div id="cf-rating" class="text-purple-400 font-bold text-xs truncate">Loading...</div>
+                        <div id="cf-rank" class="text-[8px] text-gray-500 truncate font-mono">rank info</div>
+                    </div>
+                </div>
+
+                <!-- Opportunities List -->
+                <div class="overflow-x-auto max-h-[180px]">
+                    <table class="w-full text-[11px] font-mono text-left">
+                        <thead>
+                            <tr class="text-gray-500 border-b border-white/5">
+                                <th class="pb-1.5 font-semibold">Company</th>
+                                <th class="pb-1.5 font-semibold">Role</th>
+                                <th class="pb-1.5 font-semibold">Status</th>
+                                <th class="pb-1.5 font-semibold">Score</th>
+                                <th class="pb-1.5 font-semibold text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="career-opportunities-list">
+                            <tr>
+                                <td colspan="5" class="py-3 text-center text-gray-500 italic">No job tracking entries.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Column: Action Replay Timeline + Cognitive Companion Panels -->
+        <section class="lg:col-span-3 flex flex-col gap-6">
+
+            <!-- Relationship Vector Panel -->
+            <div class="glass p-5 rounded-2xl glow-purple flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-pink-400 uppercase font-mono">Relationship Vector</h2>
+                <div class="grid grid-cols-2 gap-3 text-xs font-mono">
+                    <div class="p-2.5 rounded bg-white/5 border border-white/5">
+                        <span class="text-gray-500 text-[10px]">FAMILIARITY</span>
+                        <div id="rel-familiarity" class="text-pink-400 font-semibold">Acquaintance</div>
+                    </div>
+                    <div class="p-2.5 rounded bg-white/5 border border-white/5">
+                        <span class="text-gray-500 text-[10px]">INTERACTION DEPTH</span>
+                        <div id="rel-depth" class="text-purple-400 font-semibold">Surface-level</div>
+                    </div>
+                </div>
+                <div class="flex justify-between items-center text-xs font-mono border-t border-white/5 pt-2">
+                    <span class="text-gray-400">Quarantine Count:</span>
+                    <span id="quarantine-count" class="text-pink-400 font-bold">0</span>
+                </div>
+            </div>
+
+            <!-- Cognitive Governance Panel -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-amber-400 uppercase font-mono">Cognitive Governance</h2>
+                <div class="flex flex-col gap-2 text-xs font-mono">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Sim Quarantine:</span>
+                        <span id="gov-sim-quarantine" class="text-amber-300 font-bold">0</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Drift Delta:</span>
+                        <span id="gov-drift-delta" class="text-cyan-300 font-bold">0.0000</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Volatility:</span>
+                        <span id="gov-volatility" class="text-emerald-300 font-semibold">Stable</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Versions:</span>
+                        <span id="gov-version" class="text-gray-300 truncate max-w-[170px]">personality_v0 / profile_v0</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Runtime:</span>
+                        <span id="gov-runtime" class="text-blue-300 font-semibold">SAFE_MODE</span>
+                    </div>
+                    <div class="text-[10px] text-gray-500 leading-snug" id="gov-capability-health">
+                        Capability health pending...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Proactive Cognition Status Panel -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
+                <h2 class="text-sm font-semibold tracking-wider text-teal-400 uppercase font-mono">Proactive Cognition</h2>
+                <div class="flex flex-col gap-2 text-xs font-mono">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Cooldown:</span>
+                        <span id="proactive-cooldown" class="text-teal-400 font-bold">Ready</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Backoff Multiplier:</span>
+                        <span id="proactive-multiplier" class="text-teal-300 font-semibold">1.0x</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-400">Last Suggestion:</span>
+                        <span id="proactive-last" class="text-gray-300 truncate max-w-[180px]" title="">None</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Replay Timeline -->
+            <div class="glass p-5 rounded-2xl flex flex-col gap-4 min-h-[400px]">
+                <h2 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">Action Replay Timeline</h2>
+                <div id="timeline-container" class="flex-grow overflow-y-auto flex flex-col gap-4 pr-2 max-h-[600px] text-xs font-mono">
+                    <div class="flex gap-3 text-gray-500 italic p-4 text-center justify-center">
+                        Timeline empty. Run tasks to populate events.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="mt-auto py-4 px-8 border-t border-white/5 flex justify-between text-xs text-gray-500 font-mono">
+        <span>ARIA Local-First Cognitive Desktop Environment</span>
+        <span>Observability Layer v1.0.0</span>
+    </footer>
+
+    <!-- External JavaScript Logic -->
+    <script src="/public/control_center.js?v=1"></script>
+
+    <!-- Add Job Modal -->
+    <div id="add-job-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass max-w-md w-full p-6 rounded-2xl flex flex-col gap-4 border border-cyan-500/20">
+            <h3 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Bookmark Job Opportunity</h3>
+            <div class="flex flex-col gap-3 text-xs">
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Company Name</label>
+                    <input type="text" id="job-company" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Google">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Role Title</label>
+                    <input type="text" id="job-role" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Software Engineer Intern">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Location</label>
+                    <input type="text" id="job-location" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Mountain View, CA">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Apply Link URL</label>
+                    <input type="text" id="job-link" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="https://careers.google.com/...">
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Deadline (YYYY-MM-DD)</label>
+                    <input type="text" id="job-deadline" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. 2026-10-31">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 text-xs font-mono mt-2">
+                <button onclick="closeAddJobModal()" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-gray-300">Cancel</button>
+                <button onclick="submitJob()" class="px-3 py-1.5 rounded bg-cyan-500 text-black font-semibold">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Match Resume Modal -->
+    <div id="match-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass max-w-lg w-full p-6 rounded-2xl flex flex-col gap-4 border border-purple-500/20">
+            <h3 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">LLM Resume Matcher</h3>
+            <div class="flex flex-col gap-3 text-xs">
+                <div class="flex flex-col gap-1">
+                    <label class="text-gray-400">Target Job Description</label>
+                    <textarea id="match-description" rows="6" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-purple-500 resize-none" placeholder="Paste the job description or requirements here..."></textarea>
+                </div>
+                <div id="match-results-box" class="hidden p-3 rounded bg-white/5 border border-white/5 flex flex-col gap-2 font-mono">
+                    <div class="flex justify-between font-bold">
+                        <span>MATCH SCORE:</span>
+                        <span id="match-result-score" class="text-purple-400">0%</span>
+                    </div>
+                    <div class="text-[10px]">
+                        <span class="text-emerald-400 font-semibold">MATCHING:</span>
+                        <div id="match-result-matching" class="text-gray-300 mt-0.5 font-sans"></div>
+                    </div>
+                    <div class="text-[10px] mt-1">
+                        <span class="text-red-400 font-semibold">GAPS:</span>
+                        <div id="match-result-gaps" class="text-gray-300 mt-0.5 font-sans"></div>
+                    </div>
+                    <div class="text-[10px] mt-1">
+                        <span class="text-amber-400 font-semibold">RECOMMENDATIONS:</span>
+                        <div id="match-result-recs" class="text-gray-300 mt-0.5 font-sans"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-between items-center text-xs font-mono mt-2">
+                <span id="match-loading" class="hidden text-purple-300 animate-pulse">Deliberating...</span>
+                <div class="flex justify-end gap-2 ml-auto">
+                    <button onclick="closeMatchModal()" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-gray-300">Close</button>
+                    <button id="btn-run-match" onclick="runMatch()" class="px-3 py-1.5 rounded bg-purple-500 text-white font-semibold">Run Match</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

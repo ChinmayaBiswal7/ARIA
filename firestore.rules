@@ -24,5 +24,10 @@ service cloud.firestore {
       allow write: if request.resource.data.user == "remote";
       allow read: if false;
     }
+
+    // Allow read/write access to WebRTC sessions for signaling
+    match /webrtc_sessions/{doc} {
+      allow read, write: if true;
+    }
   }
 }

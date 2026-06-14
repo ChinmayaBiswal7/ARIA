@@ -4,6 +4,13 @@ import sqlite3
 import numpy as np
 import threading
 
+class DummyEmbeddingFunction:
+    def __call__(self, input):
+        return [[] for _ in input]
+    def name(self):
+        return "default"
+
+
 class VectorMemory:
     _instance = None
     _lock = threading.Lock()
@@ -60,6 +67,7 @@ class VectorMemory:
             # Create or get face embeddings collection
             self.faces_collection = self.chroma_client.get_or_create_collection(
                 name="aria_faces",
+                embedding_function=DummyEmbeddingFunction(),
                 metadata={"hnsw:space": "cosine"}
             )
             print("[VectorMemory] ChromaDB persistent client and collections initialized.")

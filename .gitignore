@@ -64,3 +64,22 @@ health_bridge_android/.idea/
 health_bridge_android/build/
 health_bridge_android/*/build/
 health_bridge_android/local.properties
+
+# Database files
+*.db
+
+# Models and voiceprints
+models/aria.onnx
+models/aria.onnx.data
+models/gesture_classifier.h5
+models/owner_voiceprint.npy
+models/silero_vad.onnx
+models/speechbrain_spkrec/
+
+# Edge voices cache
+assets/edge_voices_cache.json
+
+# Generated and test data
+data/
+test_faiss_face_data/
+

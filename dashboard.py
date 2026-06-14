@@ -4,6 +4,7 @@ from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Optional, Dict, List, Any
 from skills.event_bus import EventBus
 from skills.runtime_capabilities import CAPABILITIES
 try:
@@ -81,6 +82,12 @@ class CognitionState:
     subsystem_health: dict = {}
     profile_insights: dict = {}
 
+    # Dynamic Live Dashboard (Sprint V4)
+    ambient_active_tab = "AMBIENT"  # AMBIENT, SPORTS, NEWS, WEATHER, STOCKS, SEARCH, PEOPLE, PRODUCTS, VIDEOS
+    ambient_context_entity = ""     # e.g., "MATCH_RCB_GT", "PROD_MK345", "PERSON_VIRAT_KOHLI"
+    ambient_widget_data = {}        # Chameleon contract JSON
+    ambient_last_updated = 0        # Unix timestamp
+
 app = FastAPI(title="ARIA Control Center")
 
 # ── Static File Mounts & PWA Helpers ─────────────────────────────────────────
@@ -121,7 +128,823 @@ def serve_controller():
 
 @app.get("/dashboard.html")
 def serve_dashboard_html():
+    p_dash = os.path.join(public_path, "dashboard.html")
+    if os.path.exists(p_dash):
+        return FileResponse(p_dash)
     return serve_dashboard()
+
+# ── ARIA Design Lab (Engineering Studio) Backend State & APIs ─────────────────
+import json
+import re
+
+class DesignState:
+    active_project = "Mark 42"
+    project_type = "suit"
+    active_theme = ""
+    current_version = "v1"
+    
+    # Active design state (copy of current version's components)
+    components = {
+        "torso": {"type": "capsule", "radius": 0.5, "length": 1.2, "color": "#dd2222", "pos_x": 0.0, "pos_y": 0.5, "pos_z": 0.0, "rot_y": 0.0},
+        "head": {"type": "sphere", "radius": 0.28, "color": "#ffe600", "pos_x": 0.0, "pos_y": 0.8, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+        "left_arm": {"type": "cylinder", "radius": 0.15, "length": 0.9, "color": "#dd2222", "pos_x": -0.7, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+        "right_arm": {"type": "cylinder", "radius": 0.15, "length": 0.9, "color": "#dd2222", "pos_x": 0.7, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+        "left_leg": {"type": "cylinder", "radius": 0.2, "length": 1.1, "color": "#dd2222", "pos_x": -0.35, "pos_y": -1.1, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+        "right_leg": {"type": "cylinder", "radius": 0.2, "length": 1.1, "color": "#dd2222", "pos_x": 0.35, "pos_y": -1.1, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+        "arc_reactor": {"type": "sphere", "radius": 0.12, "color": "#00f0ff", "pos_x": 0.0, "pos_y": 0.2, "pos_z": 0.45, "rot_y": 0.0, "parent": "torso"}
+    }
+    
+    # Design Memory / context to resolve "it"
+    design_memory = {
+        "last_referenced_component": "torso",
+        "description": "glowing chest reactor armor suit"
+    }
+
+    # Simulation statuses
+    simulations = {
+        "airflow": False,
+        "weight_distribution": False,
+        "stability": False,
+        "heat_map": False
+    }
+
+    # AI sketch/concept alternatives generated
+    ai_concepts = []
+    
+    version_history = [
+        {
+            "version": "v1",
+            "timestamp": "13:30:00",
+            "description": "Initial design concept: Ironman Mark 42 suit with capsule limbs and central arc reactor.",
+            "components": {
+                "torso": {"type": "capsule", "radius": 0.5, "length": 1.2, "color": "#dd2222", "pos_x": 0.0, "pos_y": 0.5, "pos_z": 0.0, "rot_y": 0.0},
+                "head": {"type": "sphere", "radius": 0.28, "color": "#ffe600", "pos_x": 0.0, "pos_y": 0.8, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+                "left_arm": {"type": "cylinder", "radius": 0.15, "length": 0.9, "color": "#dd2222", "pos_x": -0.7, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+                "right_arm": {"type": "cylinder", "radius": 0.15, "length": 0.9, "color": "#dd2222", "pos_x": 0.7, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+                "left_leg": {"type": "cylinder", "radius": 0.2, "length": 1.1, "color": "#dd2222", "pos_x": -0.35, "pos_y": -1.1, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+                "right_leg": {"type": "cylinder", "radius": 0.2, "length": 1.1, "color": "#dd2222", "pos_x": 0.35, "pos_y": -1.1, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+                "arc_reactor": {"type": "sphere", "radius": 0.12, "color": "#00f0ff", "pos_x": 0.0, "pos_y": 0.2, "pos_z": 0.45, "rot_y": 0.0, "parent": "torso"}
+            }
+        }
+    ]
+
+def get_ai_concepts(project_type: str, theme: str = "") -> list:
+    t = project_type.lower()
+    th = theme.lower().strip()
+    
+    if "suit" in t or "armor" in t or "ironman" in t or "iron man" in t:
+        th_label = f" {theme.title()}" if theme else " Nano"
+        th_desc = f" infused with {theme} shielding" if theme else ""
+        return [
+            {"id": "opt_a", "label": f"Option A:{th_label} Titanium Composite", "description": f"Gold titanium alloy reinforced with micro-grid weave{th_desc}. +15% armor.", "drag": 0.0, "power": 98, "preview_type": "mesh_update", "body_color": "#ffd700" if "stealth" not in th else "#222222", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_b", "label": f"Option B:{th_label} Stealth Plating", "description": f"Matte carbon plating with active cloaking grid{th_desc}. -10% thermal signature.", "drag": 0.0, "power": 85, "preview_type": "mesh_update", "body_color": "#151515", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_c", "label": f"Option C:{th_label} Arc Overcharge", "description": f"Enlarged chest reactor core{th_desc}. Boosts repulsor beam output by 25%.", "drag": 0.0, "power": 120, "preview_type": "mesh_update", "body_color": "#dd2222" if "stealth" not in th else "#4b0082", "spoiler_size": 1.0, "headlights_thickness": 1.0}
+        ]
+    elif "drone" in t or "copter" in t:
+        th_label = f" {theme.title()}" if theme else " Hexa"
+        th_desc = f" optimized for {theme}" if theme else ""
+        return [
+            {"id": "opt_a", "label": f"Option A:{th_label} Carbon Frame", "description": f"Vibration-damped carbon composite chassis{th_desc}. Max hover time: 55m.", "drag": 1.2, "power": 90, "preview_type": "mesh_update", "body_color": "#2c3e50" if "stealth" not in th else "#1c1c1c", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_b", "label": f"Option B:{th_label} Heavy Lift", "description": f"Enlarged rotor blades and high torque brushless motors{th_desc}. +3kg payload.", "drag": 2.5, "power": 120, "preview_type": "mesh_update", "body_color": "#e67e22", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_c", "label": f"Option C:{th_label} FPV High Agility", "description": f"Ultra-lightweight aerodynamic shroud{th_desc}. Max speed: 120 km/h.", "drag": 0.8, "power": 110, "preview_type": "mesh_update", "body_color": "#00f0ff", "spoiler_size": 1.0, "headlights_thickness": 1.0}
+        ]
+    elif "house" in t or "building" in t or "home" in t or "mansion" in t:
+        return [
+            {"id": "opt_a", "label": "Option A: Cantilever Glasshouse", "description": "Overhanging glass wings with panoramic sea-facing solar panels.", "drag": 0.0, "power": 100, "preview_type": "mesh_update", "body_color": "#f8fafc", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_b", "label": "Option B: Cyber Punk Bunker", "description": "Concrete structural shell, neon channel grooves, ballistic security windows.", "drag": 0.0, "power": 85, "preview_type": "mesh_update", "body_color": "#334155", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_c", "label": "Option C: Biophilic Green Roof", "description": "Laminated timber framing, living vegetation canopy, integrated rainwater cistern.", "drag": 0.0, "power": 60, "preview_type": "mesh_update", "body_color": "#e2e8f0", "spoiler_size": 1.0, "headlights_thickness": 1.0}
+        ]
+    elif "room" in t or "office" in t:
+        return [
+            {"id": "opt_a", "label": "Option A: Holographic Workspace", "description": "Integrated wall display grids, central projection floor, neon styling.", "drag": 0.0, "power": 100, "preview_type": "mesh_update", "body_color": "#0f172a", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_b", "label": "Option B: Minimalist Studio", "description": "Natural oak wood panels, dynamic dimmable lights, ergonomic active chair.", "drag": 0.0, "power": 50, "preview_type": "mesh_update", "body_color": "#fafaf9", "spoiler_size": 1.0, "headlights_thickness": 1.0},
+            {"id": "opt_c", "label": "Option C: Industrial Lab", "description": "Exposed pipe ducts, steel counter workbenches, component bins.", "drag": 0.0, "power": 120, "preview_type": "mesh_update", "body_color": "#475569", "spoiler_size": 1.0, "headlights_thickness": 1.0}
+        ]
+    else: # Car
+        return [
+            {"id": "opt_a", "label": "Option A: Aggressive Shark Nose", "description": "Thinner headlights, shark-fin side scoops, 4% drag reduction.", "drag": 0.28, "power": 800, "preview_type": "mesh_update", "body_color": "#ff007f", "spoiler_size": 1.4, "headlights_thickness": 0.4},
+            {"id": "opt_b", "label": "Option B: McLaren Longtail", "description": "Elongated rear spoiler, low drag, high speed stability.", "drag": 0.29, "power": 800, "preview_type": "mesh_update", "body_color": "#ff8a00", "spoiler_size": 1.8, "headlights_thickness": 0.8},
+            {"id": "opt_c", "label": "Option C: Stealth Hybrid", "description": "Closed air intakes, active aerodynamics, matte carbon styling.", "drag": 0.30, "power": 850, "preview_type": "mesh_update", "body_color": "#333333", "spoiler_size": 1.0, "headlights_thickness": 0.6}
+        ]
+
+def init_project_components(project_name: str, project_type: str = "car"):
+    t = project_type.lower()
+    if "suit" in t or "armor" in t or "ironman" in t or "iron man" in t:
+        return {
+            "torso": {"type": "capsule", "radius": 0.5, "length": 1.2, "color": "#dd2222", "pos_x": 0.0, "pos_y": 0.5, "pos_z": 0.0, "rot_y": 0.0},
+            "head": {"type": "sphere", "radius": 0.28, "color": "#ffe600", "pos_x": 0.0, "pos_y": 0.8, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+            "left_arm": {"type": "cylinder", "radius": 0.15, "length": 0.9, "color": "#dd2222", "pos_x": -0.7, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+            "right_arm": {"type": "cylinder", "radius": 0.15, "length": 0.9, "color": "#dd2222", "pos_x": 0.7, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+            "left_leg": {"type": "cylinder", "radius": 0.2, "length": 1.1, "color": "#dd2222", "pos_x": -0.35, "pos_y": -1.1, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+            "right_leg": {"type": "cylinder", "radius": 0.2, "length": 1.1, "color": "#dd2222", "pos_x": 0.35, "pos_y": -1.1, "pos_z": 0.0, "rot_y": 0.0, "parent": "torso"},
+            "arc_reactor": {"type": "sphere", "radius": 0.12, "color": "#00f0ff", "pos_x": 0.0, "pos_y": 0.2, "pos_z": 0.45, "rot_y": 0.0, "parent": "torso"}
+        }
+    elif "drone" in t or "copter" in t:
+        return {
+            "core": {"type": "cylinder", "radius": 0.6, "length": 0.15, "color": "#222233", "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0},
+            "arm_fl": {"type": "cylinder", "radius": 0.05, "length": 0.8, "color": "#555555", "pos_x": -0.5, "pos_y": 0.0, "pos_z": 0.5, "rot_y": 0.78, "parent": "core"},
+            "arm_fr": {"type": "cylinder", "radius": 0.05, "length": 0.8, "color": "#555555", "pos_x": 0.5, "pos_y": 0.0, "pos_z": 0.5, "rot_y": -0.78, "parent": "core"},
+            "arm_bl": {"type": "cylinder", "radius": 0.05, "length": 0.8, "color": "#555555", "pos_x": -0.5, "pos_y": 0.0, "pos_z": -0.5, "rot_y": -0.78, "parent": "core"},
+            "arm_br": {"type": "cylinder", "radius": 0.05, "length": 0.8, "color": "#555555", "pos_x": 0.5, "pos_y": 0.0, "pos_z": -0.5, "rot_y": 0.78, "parent": "core"},
+            "rotor_fl": {"type": "cylinder", "radius": 0.35, "length": 0.02, "color": "#00f0ff", "pos_x": -0.35, "pos_y": 0.08, "pos_z": 0.35, "rot_y": 0.0, "parent": "arm_fl"},
+            "rotor_fr": {"type": "cylinder", "radius": 0.35, "length": 0.02, "color": "#00f0ff", "pos_x": 0.35, "pos_y": 0.08, "pos_z": 0.35, "rot_y": 0.0, "parent": "arm_fr"},
+            "rotor_bl": {"type": "cylinder", "radius": 0.35, "length": 0.02, "color": "#00f0ff", "pos_x": -0.35, "pos_y": 0.08, "pos_z": -0.35, "rot_y": 0.0, "parent": "arm_bl"},
+            "rotor_br": {"type": "cylinder", "radius": 0.35, "length": 0.02, "color": "#00f0ff", "pos_x": 0.35, "pos_y": 0.08, "pos_z": -0.35, "rot_y": 0.0, "parent": "arm_br"}
+        }
+    elif "house" in t or "building" in t or "home" in t or "mansion" in t:
+        return {
+            "foundation": {"type": "box", "length": 4.0, "width": 4.0, "height": 2.2, "color": "#e2e8f0", "pos_x": 0.0, "pos_y": 0.6, "pos_z": 0.0, "rot_y": 0.0},
+            "roof": {"type": "cone", "radius": 3.0, "length": 1.2, "color": "#dd2222", "pos_x": 0.0, "pos_y": 1.5, "pos_z": 0.0, "rot_y": 0.78, "parent": "foundation"},
+            "door": {"type": "box", "length": 0.1, "width": 0.7, "height": 1.4, "color": "#ff6c00", "pos_x": 0.0, "pos_y": -0.3, "pos_z": 2.0, "rot_y": 0.0, "parent": "foundation"},
+            "window_l": {"type": "box", "length": 0.1, "width": 0.6, "height": 0.6, "color": "#00f0ff", "pos_x": -1.2, "pos_y": 0.3, "pos_z": 2.0, "rot_y": 0.0, "parent": "foundation"},
+            "window_r": {"type": "box", "length": 0.1, "width": 0.6, "height": 0.6, "color": "#00f0ff", "pos_x": 1.2, "pos_y": 0.3, "pos_z": 2.0, "rot_y": 0.0, "parent": "foundation"}
+        }
+    elif "room" in t or "office" in t:
+        return {
+            "floor": {"type": "box", "length": 4.0, "width": 4.0, "height": 0.05, "color": "#333344", "pos_x": 0.0, "pos_y": -0.4, "pos_z": 0.0, "rot_y": 0.0},
+            "back_wall": {"type": "box", "length": 4.0, "width": 0.05, "height": 2.0, "color": "#555566", "pos_x": 0.0, "pos_y": 1.0, "pos_z": -2.0, "rot_y": 0.0, "parent": "floor"},
+            "desk": {"type": "box", "length": 1.6, "width": 0.8, "height": 0.75, "color": "#ff6c00", "pos_x": 0.0, "pos_y": 0.4, "pos_z": -0.8, "rot_y": 0.0, "parent": "floor"},
+            "chair": {"type": "box", "length": 0.5, "width": 0.5, "height": 0.9, "color": "#ff007f", "pos_x": 0.0, "pos_y": 0.3, "pos_z": 0.0, "rot_y": 0.0, "parent": "floor"},
+            "monitor": {"type": "box", "length": 0.8, "width": 0.1, "height": 0.45, "color": "#111111", "pos_x": 0.0, "pos_y": 0.5, "pos_z": 0.0, "rot_y": 0.0, "parent": "desk"}
+        }
+    else: # Default: Car
+        return {
+            "body": {"type": "box", "length": 4.5, "width": 2.0, "height": 1.1, "color": "#ff007f", "aerodynamics": 0.32, "spoiler_size": 1.0, "headlights_thickness": 1.0, "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0},
+            "engine": {"type": "box", "horsepower": 800, "hybrid": True, "torque": 750, "turbo": True, "pos_x": 0.0, "pos_y": 0.1, "pos_z": -0.8, "rot_y": 0.0},
+            "wheels": {"type": "wheels", "radius": 0.45, "width": 0.3, "color": "#333333", "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0, "rot_y": 0.0},
+            "spoiler": {"type": "spoiler", "size": 1.0, "color": "#00f0ff", "pos_x": 0.0, "pos_y": 0.5, "pos_z": -1.8, "rot_y": 0.0},
+            "chassis": {"type": "box", "wheelbase": 2.8, "ride_height": 0.12, "pos_x": 0.0, "pos_y": -0.1, "pos_z": 0.0, "rot_y": 0.0}
+        }
+
+def match_component_name(name: str) -> str:
+    n = name.lower().strip()
+    p_type = getattr(DesignState, "project_type", "car").lower()
+    if "body" in n or "aerodynamics" in n:
+        if p_type == "suit": return "torso"
+        if p_type == "drone": return "core"
+        if p_type == "house": return "foundation"
+        if p_type == "room": return "floor"
+        return "body"
+    if "engine" in n or "motor" in n or "power" in n: return "engine"
+    if "wheel" in n or "tire" in n: return "wheels"
+    if "spoiler" in n or "wing" in n: return "spoiler"
+    if "chassis" in n or "wheelbase" in n or "height" in n: return "chassis"
+    # Dynamic key matching
+    for k in DesignState.components.keys():
+        if n in k or k in n:
+            return k
+    return n
+
+def create_new_version(description: str):
+    v_num = len(DesignState.version_history) + 1
+    v_name = f"v{v_num}"
+    DesignState.current_version = v_name
+    DesignState.version_history.append({
+        "version": v_name,
+        "timestamp": "13:45:00",
+        "description": description,
+        "components": json.loads(json.dumps(DesignState.components))
+    })
+
+def parse_design_command(text: str) -> dict:
+    text_clean = text.lower().strip()
+    
+    # Clean up common voice dictation typos
+    text_clean = text_clean.replace("get pack", "jet pack")
+    text_clean = text_clean.replace("getpack", "jet pack")
+    text_clean = text_clean.replace("lauch", "launch")
+    
+    # 0. Immersive HUD Mode controls
+    if any(phrase in text_clean for phrase in ["hide hud", "hide interface", "immersive mode", "full screen", "clear workspace"]):
+        return {
+            "status": "success",
+            "message": "Immersive mode activated. Hiding HUD panels.",
+            "action": "TOGGLE_IMMERSIVE",
+            "immersive": True
+        }
+    if any(phrase in text_clean for phrase in ["show hud", "show interface", "restore hud", "show controls", "hud online"]):
+        return {
+            "status": "success",
+            "message": "HUD panels online. Interface restored.",
+            "action": "TOGGLE_IMMERSIVE",
+            "immersive": False
+        }
+        
+    ref_comp = DesignState.design_memory["last_referenced_component"]
+    
+    # 1. Create project
+    m = re.search(r"create (?:a )?(stealth|heavy|tactical|cyber|minimalist)?\s*(car|suit|drone|house|room)?\s*project(?:\s+called)?\s+([a-zA-Z0-9_\s\-]+)", text_clean)
+    if not m:
+        m = re.search(r"create (?:a )?(stealth|heavy|tactical|cyber|minimalist)?\s*(car|suit|drone|house|room)?\s*(?:project|design)\s+([a-zA-Z0-9_\s\-]+)", text_clean)
+    if m:
+        theme = m.group(1) or ""
+        proj_type = m.group(2) or "car"
+        name = m.group(3).strip().title()
+        
+        if not m.group(2):
+            n_lower = name.lower()
+            if "suit" in n_lower or "armor" in n_lower or "ironman" in n_lower or "iron man" in n_lower:
+                proj_type = "suit"
+            elif "drone" in n_lower or "copter" in n_lower:
+                proj_type = "drone"
+            elif "house" in n_lower or "home" in n_lower or "mansion" in n_lower:
+                proj_type = "house"
+            elif "room" in n_lower or "office" in n_lower:
+                proj_type = "room"
+            else:
+                proj_type = "car"
+                
+        DesignState.active_project = name
+        DesignState.project_type = proj_type
+        DesignState.active_theme = theme
+        DesignState.current_version = "v1"
+        DesignState.components = init_project_components(name, proj_type)
+        
+        # Apply theme colors
+        primary_comp = "body"
+        for k in ["body", "torso", "core", "foundation", "floor"]:
+            if k in DesignState.components:
+                primary_comp = k
+                break
+                
+        if theme == "stealth":
+            DesignState.components[primary_comp]["color"] = "#151515"
+        elif theme == "heavy":
+            DesignState.components[primary_comp]["color"] = "#e67e22"
+        elif theme == "tactical":
+            DesignState.components[primary_comp]["color"] = "#2c3e50"
+        elif theme == "cyber":
+            DesignState.components[primary_comp]["color"] = "#00f0ff"
+        elif theme == "minimalist":
+            DesignState.components[primary_comp]["color"] = "#f8fafc"
+            
+        DesignState.ai_concepts = get_ai_concepts(proj_type, theme)
+        
+        DesignState.version_history = [{
+            "version": "v1",
+            "timestamp": "13:30:00",
+            "description": f"Initial project '{name}' initialized as a {theme.upper() + ' ' if theme else ''}{proj_type.upper()} design.",
+            "components": json.loads(json.dumps(DesignState.components))
+        }]
+        return {
+            "status": "success",
+            "message": f"Project '{name}' has been created as a {theme.upper() + ' ' if theme else ''}{proj_type.upper()} type. Dynamic mesh workspace loaded.",
+            "action": "CREATE_PROJECT"
+        }
+
+    # 2. Simulation toggles
+    if "airflow" in text_clean:
+        DesignState.simulations["airflow"] = not DesignState.simulations["airflow"]
+        status_str = "activated" if DesignState.simulations["airflow"] else "deactivated"
+        return {
+            "status": "success",
+            "message": f"Airflow wind-tunnel simulation is now {status_str}.",
+            "action": "SIMULATION_TOGGLE",
+            "simulation": "airflow",
+            "state": DesignState.simulations["airflow"]
+        }
+    if "weight" in text_clean or "center of mass" in text_clean:
+        DesignState.simulations["weight_distribution"] = not DesignState.simulations["weight_distribution"]
+        status_str = "activated" if DesignState.simulations["weight_distribution"] else "deactivated"
+        return {
+            "status": "success",
+            "message": f"Weight distribution sensor overlay is now {status_str}.",
+            "action": "SIMULATION_TOGGLE",
+            "simulation": "weight_distribution",
+            "state": DesignState.simulations["weight_distribution"]
+        }
+    if "stability" in text_clean:
+        DesignState.simulations["stability"] = not DesignState.simulations["stability"]
+        status_str = "activated" if DesignState.simulations["stability"] else "deactivated"
+        return {
+            "status": "success",
+            "message": f"FEA stress and stability analysis is now {status_str}.",
+            "action": "SIMULATION_TOGGLE",
+            "simulation": "stability",
+            "state": DesignState.simulations["stability"]
+        }
+    if "heat map" in text_clean or "thermal" in text_clean:
+        DesignState.simulations["heat_map"] = not DesignState.simulations["heat_map"]
+        status_str = "activated" if DesignState.simulations["heat_map"] else "deactivated"
+        return {
+            "status": "success",
+            "message": f"Thermal distribution imaging is now {status_str}.",
+            "action": "SIMULATION_TOGGLE",
+            "simulation": "heat_map",
+            "state": DesignState.simulations["heat_map"]
+        }
+
+    # 3. Apply concept
+    m = re.search(r"apply (?:option|concept) ([a-c])", text_clean)
+    if not m:
+        m = re.search(r"use (?:option|concept) ([a-c])", text_clean)
+    if not m:
+        m = re.search(r"select (?:option|concept) ([a-c])", text_clean)
+    if m:
+        opt = m.group(1).lower()
+        idx = ord(opt) - ord('a')
+        concepts = get_ai_concepts(getattr(DesignState, "project_type", "car"), getattr(DesignState, "active_theme", ""))
+        concept = concepts[idx]
+        
+        primary = "body"
+        for k in ["body", "torso", "core", "foundation", "floor"]:
+            if k in DesignState.components:
+                primary = k
+                break
+        
+        DesignState.components[primary]["color"] = concept["body_color"]
+        if "aerodynamics" in DesignState.components[primary]:
+            DesignState.components[primary]["aerodynamics"] = concept["drag"]
+        if "spoiler" in DesignState.components:
+            DesignState.components["spoiler"]["size"] = concept["spoiler_size"]
+            
+        create_new_version(f"Applied AI Concept {opt.upper()}: {concept['label']}")
+        return {
+            "status": "success",
+            "message": f"Merged Option {opt.upper()} configuration: {concept['description']}",
+            "action": "APPLY_CONCEPT"
+        }
+
+    # 4. Version Switcher
+    m = re.search(r"compare version (v[1-9]) and (v[1-9])", text_clean)
+    if not m:
+        m = re.search(r"compare (v[1-9]) and (v[1-9])", text_clean)
+    if m:
+        vA = m.group(1).lower()
+        vB = m.group(2).lower()
+        verA = next((v for v in DesignState.version_history if v["version"] == vA), None)
+        verB = next((v for v in DesignState.version_history if v["version"] == vB), None)
+        if verA and verB:
+            diffs = []
+            for comp, attrs in verA["components"].items():
+                for attr, val in attrs.items():
+                    valB = verB["components"][comp].get(attr)
+                    if val != valB:
+                        diffs.append(f"{comp.title()} {attr.replace('_',' ')} changed from {val} to {valB}")
+            diff_text = "; ".join(diffs) if diffs else "No differences detected."
+            return {
+                "status": "success",
+                "message": f"Comparison complete. Differences: {diff_text}",
+                "action": "COMPARE_VERSIONS",
+                "diff": diffs
+            }
+        return {"status": "error", "message": "One or both versions do not exist."}
+
+    m = re.search(r"revert to (v[1-9])", text_clean)
+    if not m:
+        m = re.search(r"load version (v[1-9])", text_clean)
+    if m:
+        v_num = m.group(1).lower()
+        ver = next((v for v in DesignState.version_history if v["version"] == v_num), None)
+        if ver:
+            DesignState.components = json.loads(json.dumps(ver["components"]))
+            DesignState.current_version = v_num
+            return {
+                "status": "success",
+                "message": f"Loaded version {v_num.upper()} parameters into canvas.",
+                "action": "LOAD_VERSION"
+            }
+
+    # 4.5 Add component: "add [component] [type] to [parent]" or "add [component] to [parent]"
+    add_match = re.search(r"(?:add|insert)\s+([a-zA-Z0-9_\s]+?)(?:\s+of\s+type\s+([a-zA-Z]+))?(?:\s+to\s+([a-zA-Z0-9_]+))?$", text_clean)
+    if add_match:
+        comp_raw = add_match.group(1).strip()
+        comp_name = comp_raw.replace(' ', '_')
+        comp_type = "box"
+        parent_name = None
+        
+        if add_match.group(2):
+            comp_type = add_match.group(2).strip().lower()
+        else:
+            if "arm" in comp_name or "leg" in comp_name or "pillar" in comp_name or "cannon" in comp_name or "rotor" in comp_name:
+                comp_type = "cylinder"
+            elif "reactor" in comp_name or "core" in comp_name or "globe" in comp_name or "head" in comp_name or "sphere" in comp_name:
+                comp_type = "sphere"
+            elif "roof" in comp_name or "cone" in comp_name:
+                comp_type = "cone"
+            elif "wing" in comp_name or "spoiler" in comp_name:
+                comp_type = "spoiler"
+            elif "wheel" in comp_name or "tire" in comp_name:
+                comp_type = "wheels"
+
+        if add_match.group(3):
+            parent_raw = add_match.group(3).strip()
+            parent_name = match_component_name(parent_raw)
+            if parent_name not in DesignState.components:
+                parent_name = None
+        else:
+            # Auto-parent to primary component if parent is omitted in voice command
+            p_type = getattr(DesignState, "project_type", "car").lower()
+            if p_type == "suit":
+                parent_name = "torso" if "torso" in DesignState.components else None
+            elif p_type == "drone":
+                parent_name = "core" if "core" in DesignState.components else None
+            elif p_type == "house":
+                parent_name = "foundation" if "foundation" in DesignState.components else None
+            elif p_type == "room":
+                parent_name = "floor" if "floor" in DesignState.components else None
+            else:
+                parent_name = "body" if "body" in DesignState.components else None
+
+        if comp_name not in DesignState.components:
+            # Smart coordinate offsets & dimensions defaults based on name
+            px, py, pz = 0.0, 0.4 if parent_name else 0.8, 0.0
+            col = "#00f0ff" # Default cyan glow
+            length_val = 1.0
+            width_val = 1.0
+            radius_val = 0.4
+            
+            p_type = getattr(DesignState, "project_type", "car").lower()
+            
+            # Identify smart characteristics
+            if "jet" in comp_name or "pack" in comp_name or "booster" in comp_name or "thruster" in comp_name:
+                comp_type = "box"
+                col = "#dd2222" # Match suit red armor color
+                px, py, pz = 0.0, 0.1, -0.55 # Behind back relative to torso
+                length_val = 0.4 # thickness
+                width_val = 0.8 # width
+                radius_val = 0.7 # height (reused as radius/height)
+            elif "launcher" in comp_name or "cannon" in comp_name or "weapon" in comp_name:
+                comp_type = "cylinder"
+                col = "#ffe600" # Gold accent color
+                px, py, pz = 0.35, 0.6, 0.15 # Shoulder mount placement
+                length_val = 0.7
+                radius_val = 0.08
+            elif "reactor" in comp_name:
+                comp_type = "sphere"
+                col = "#00f0ff" # Blue cyan core glow
+                px, py, pz = 0.0, 0.2, 0.45 # Chest mount placement
+                radius_val = 0.12
+            elif "shield" in comp_name:
+                comp_type = "box"
+                col = "#dd2222" # Shield color
+                # Auto-attach to left arm if present on suit
+                if p_type == "suit" and "left_arm" in DesignState.components:
+                    parent_name = "left_arm"
+                    px, py, pz = -0.1, 0.0, 0.2
+                else:
+                    px, py, pz = -0.5, 0.0, 0.2
+                length_val = 0.1
+                width_val = 0.6
+                radius_val = 0.6
+            elif "wing" in comp_name:
+                comp_type = "spoiler"
+                col = "#00f0ff"
+                px, py, pz = 0.0, 0.5, -1.8
+            else:
+                # Fallback to standard sizes based on geometry type
+                if comp_type == "cylinder":
+                    length_val = 0.8
+                    width_val = 0.2
+                    radius_val = 0.15
+                elif comp_type == "sphere":
+                    radius_val = 0.4
+                elif comp_type == "cone":
+                    length_val = 0.8
+                    radius_val = 0.4
+                else: # box
+                    length_val = 1.0
+                    width_val = 1.0
+                    radius_val = 0.4 # height
+                    
+            DesignState.components[comp_name] = {
+                "type": comp_type,
+                "length": length_val,
+                "width": width_val,
+                "radius": radius_val,
+                "color": col,
+                "pos_x": px,
+                "pos_y": py,
+                "pos_z": pz,
+                "rot_y": 0.0,
+                "parent": parent_name
+            }
+            DesignState.design_memory["last_referenced_component"] = comp_name
+            msg = f"Assembled and added new {comp_raw} module (type: {comp_type})"
+            if parent_name:
+                msg += f" attached to {parent_name}"
+            msg += " to workspace."
+            create_new_version(f"Added component {comp_name} ({comp_type})")
+            return {
+                "status": "success",
+                "message": msg,
+                "action": "ADD_COMPONENT",
+                "component": comp_name
+            }
+
+    # 4.6 Remove component: "remove [component]" or "delete [component]"
+    rm_match = re.search(r"(?:remove|delete|de-assemble)\s+([a-zA-Z0-9_]+)", text_clean)
+    if rm_match:
+        comp_name = match_component_name(rm_match.group(1).strip())
+        if comp_name in DesignState.components:
+            # Symmetrically remove any children referencing it
+            to_remove = [comp_name]
+            for k, v in list(DesignState.components.items()):
+                if v.get("parent") == comp_name:
+                    to_remove.append(k)
+            
+            for k in to_remove:
+                if k in DesignState.components:
+                    del DesignState.components[k]
+                    
+            create_new_version(f"Removed component: {comp_name}")
+            return {
+                "status": "success",
+                "message": f"De-assembled and removed the {comp_name} module (and its sub-assemblies).",
+                "action": "REMOVE_COMPONENT",
+                "component": comp_name
+            }
+
+    # 5. Modifiers
+    color_map = {
+        "red": "#ff0000", "blue": "#0022ff", "green": "#00ff22", "cyan": "#00f0ff",
+        "orange": "#ff6c00", "yellow": "#ffe600", "purple": "#8f00ff", "pink": "#ff00c8",
+        "white": "#ffffff", "black": "#151515", "dark gray": "#333333", "gold": "#ffd700"
+    }
+    found_color = None
+    for name, code in color_map.items():
+        if name in text_clean:
+            found_color = code
+            break
+    hex_match = re.search(r"#(?:[0-9a-fA-F]{3}){1,2}\b", text_clean)
+    if hex_match:
+        found_color = hex_match.group(0)
+
+    if found_color:
+        target = ref_comp
+        for k in DesignState.components.keys():
+            if k in text_clean:
+                target = k
+                break
+        if "wheel" in text_clean: target = "wheels"
+        elif "spoiler" in text_clean: target = "spoiler"
+        elif "body" in text_clean: target = match_component_name("body")
+        elif "chassis" in text_clean: target = "chassis"
+
+        if target in DesignState.components:
+            DesignState.components[target]["color"] = found_color
+            create_new_version(f"Modified {target} color to {found_color}")
+            return {
+                "status": "success",
+                "message": f"Modified {target} surface color to {found_color}.",
+                "action": "UPDATE_COMPONENT",
+                "component": target
+            }
+
+    # Generic dimension scaling: scale component by X% or make component larger/smaller
+    scale_match = re.search(r"(?:scale|make)\s+([a-zA-Z0-9_\s]*)\s*(?:by\s+)?([0-9]+)%", text_clean)
+    if not scale_match:
+        scale_match = re.search(r"make\s+([a-zA-Z0-9_\s]*)\s+(larger|smaller|bigger|thinner|narrower|longer)", text_clean)
+    if scale_match:
+        comp_name = scale_match.group(1).strip()
+        comp_name = ref_comp if not comp_name else match_component_name(comp_name)
+        if comp_name in DesignState.components:
+            comp = DesignState.components[comp_name]
+            pct = 0.20
+            has_pct = False
+            try:
+                if scale_match.group(2).isdigit():
+                    pct = float(scale_match.group(2)) / 100.0
+                    has_pct = True
+            except:
+                pass
+            if not has_pct:
+                keyword = scale_match.group(2)
+                if keyword in ["larger", "bigger", "longer"]:
+                    pct = 0.25
+                elif keyword in ["smaller", "thinner", "narrower"]:
+                    pct = -0.25
+            for dim in ["length", "width", "height", "radius", "size"]:
+                if dim in comp:
+                    comp[dim] = max(0.05, comp[dim] * (1 + pct))
+            DesignState.design_memory["last_referenced_component"] = comp_name
+            create_new_version(f"Scaled {comp_name} by {pct*100}%")
+            return {
+                "status": "success",
+                "message": f"Rescaled {comp_name} dimensions by {pct*100:+.0f}%.",
+                "action": "UPDATE_COMPONENT",
+                "component": comp_name
+            }
+
+    # Translation: move component dir X cm
+    move_match = re.search(r"move\s+([a-zA-Z0-9_\s]+)\s+(back|forward|up|down|left|right)\s*([0-9]+)\s*(cm|m|degrees)?", text_clean)
+    if not move_match:
+        move_match = re.search(r"move\s+()(back|forward|up|down|left|right)\s*([0-9]+)\s*(cm|m|degrees)?", text_clean)
+    if move_match:
+        comp_name = move_match.group(1).strip()
+        direction = move_match.group(2)
+        amount = float(move_match.group(3))
+        unit = move_match.group(4) or "cm"
+        comp_name = ref_comp if not comp_name else match_component_name(comp_name)
+        
+        if comp_name in DesignState.components:
+            val = amount / 100.0 if unit == "cm" else amount
+            if direction == "back": DesignState.components[comp_name]["pos_z"] -= val
+            elif direction == "forward": DesignState.components[comp_name]["pos_z"] += val
+            elif direction == "left": DesignState.components[comp_name]["pos_x"] -= val
+            elif direction == "right": DesignState.components[comp_name]["pos_x"] += val
+            elif direction == "up": DesignState.components[comp_name]["pos_y"] += val
+            elif direction == "down": DesignState.components[comp_name]["pos_y"] -= val
+            DesignState.design_memory["last_referenced_component"] = comp_name
+            create_new_version(f"Moved {comp_name} {direction} by {amount}{unit}")
+            return {
+                "status": "success",
+                "message": f"Translated {comp_name} mesh {direction} by {amount} {unit}.",
+                "action": "UPDATE_COMPONENT",
+                "component": comp_name
+            }
+
+    # Rotation: rotate component X degrees
+    rot_match = re.search(r"rotate\s+([a-zA-Z0-9_\s]*)\s*(?:by\s+)?([0-9\-]+)\s*(?:deg|degrees)?", text_clean)
+    if rot_match:
+        comp_name = rot_match.group(1).strip()
+        degrees = float(rot_match.group(2))
+        comp_name = ref_comp if not comp_name else match_component_name(comp_name)
+        if comp_name in DesignState.components:
+            import math
+            rad = math.radians(degrees)
+            DesignState.components[comp_name]["rot_y"] += rad
+            create_new_version(f"Rotated {comp_name} by {degrees} degrees")
+            return {
+                "status": "success",
+                "message": f"Rotated {comp_name} alignment by {degrees}°.",
+                "action": "UPDATE_COMPONENT",
+                "component": comp_name
+            }
+
+    # Spoiler size
+    if "spoiler" in text_clean and "spoiler" in DesignState.components:
+        if "increase" in text_clean or "larger" in text_clean or "bigger" in text_clean:
+            DesignState.components["spoiler"]["size"] += 0.25
+            if "body" in DesignState.components and "aerodynamics" in DesignState.components["body"]:
+                DesignState.components["body"]["aerodynamics"] = max(0.24, DesignState.components["body"]["aerodynamics"] - 0.02)
+            create_new_version("Increased rear spoiler wing profile")
+            return {
+                "status": "success", "message": "Scaled spoiler wing surface. Downforce ratio optimized.",
+                "action": "UPDATE_COMPONENT", "component": "spoiler"
+            }
+        elif "decrease" in text_clean or "smaller" in text_clean:
+            DesignState.components["spoiler"]["size"] = max(0.4, DesignState.components["spoiler"]["size"] - 0.25)
+            if "body" in DesignState.components and "aerodynamics" in DesignState.components["body"]:
+                DesignState.components["body"]["aerodynamics"] = min(0.38, DesignState.components["body"]["aerodynamics"] + 0.01)
+            create_new_version("Decreased rear spoiler wing profile")
+            return {
+                "status": "success", "message": "Reduced spoiler wing profile.",
+                "action": "UPDATE_COMPONENT", "component": "spoiler"
+            }
+
+    # Headlights
+    if "headlight" in text_clean and "body" in DesignState.components:
+        if "thinner" in text_clean or "narrow" in text_clean or "slim" in text_clean:
+            DesignState.components["body"]["headlights_thickness"] = max(0.15, DesignState.components["body"]["headlights_thickness"] - 0.2)
+            if "aerodynamics" in DesignState.components["body"]:
+                DesignState.components["body"]["aerodynamics"] = max(0.25, DesignState.components["body"]["aerodynamics"] - 0.01)
+            create_new_version("Headlight bezel profile reduced")
+            return {
+                "status": "success", "message": "Laser headlights thickness slimmed. Coefficient of drag minimized.",
+                "action": "UPDATE_COMPONENT", "component": "body"
+            }
+
+    # Wheelbase
+    if "wheelbase" in text_clean and "chassis" in DesignState.components:
+        if "increase" in text_clean or "longer" in text_clean or "extend" in text_clean:
+            DesignState.components["chassis"]["wheelbase"] += 0.25
+            create_new_version("Extended chassis wheelbase")
+            return {
+                "status": "success", "message": "Extended vehicle wheelbase by 25cm for high speed stability.",
+                "action": "UPDATE_COMPONENT", "component": "chassis"
+            }
+
+    # Wheels scale
+    if "wheel" in text_clean and "wheels" in DesignState.components:
+        scale_m = re.search(r"(?:scale|increase|decrease)\s+(?:wheels|wheel)\s*(?:by\s+)?([0-9]+)%", text_clean)
+        if scale_m:
+            pct = float(scale_m.group(1)) / 100.0
+            if "decrease" in text_clean:
+                DesignState.components["wheels"]["radius"] = max(0.2, DesignState.components["wheels"]["radius"] * (1 - pct))
+            else:
+                DesignState.components["wheels"]["radius"] = min(0.8, DesignState.components["wheels"]["radius"] * (1 + pct))
+            create_new_version(f"Scaled wheels by {scale_m.group(1)}%")
+            return {
+                "status": "success", "message": f"Rescaled wheels by {scale_m.group(1)}%.",
+                "action": "UPDATE_COMPONENT", "component": "wheels"
+            }
+
+    # Engine Power / Arc Reactor calibration
+    if "engine" in text_clean or "power" in text_clean or "horsepower" in text_clean or "hp" in text_clean or "reactor" in text_clean:
+        hp_match = re.search(r"([0-9]+)\s*(?:hp|horsepower|%)", text_clean)
+        if hp_match:
+            val = int(hp_match.group(1))
+            if "arc_reactor" in DesignState.components:
+                DesignState.components["arc_reactor"]["radius"] = min(0.35, max(0.05, 0.12 * (val / 100.0)))
+                create_new_version(f"Calibrated arc reactor power to {val}%")
+                return {
+                    "status": "success", "message": f"Arc Reactor output calibrated to {val}%. Resonance core stabilized.",
+                    "action": "UPDATE_COMPONENT", "component": "arc_reactor"
+                }
+            elif "engine" in DesignState.components:
+                DesignState.components["engine"]["horsepower"] = val
+                DesignState.components["engine"]["torque"] = int(val * 0.95)
+                create_new_version(f"Upgraded horsepower target to {val} HP")
+                return {
+                    "status": "success", "message": f"Engine module mapped to V8 configuration outputting {val} HP.",
+                    "action": "UPDATE_COMPONENT", "component": "engine"
+                }
+
+    # Fallback to general AI sketch merge if it is a design sentence
+    if len(text_clean.split()) >= 3:
+        create_new_version(f"Merged iteration: {text}")
+        return {
+            "status": "success",
+            "message": f"Design iteration processed: '{text}'. Core component constraints updated.",
+            "action": "INTELLIGENT_MERGE"
+        }
+
+    return {
+        "status": "error",
+        "message": "Engineering prompt not recognized. Try 'move engine back 20cm', 'change body color to cyan', or 'airflow simulation'."
+    }
+
+class DesignCommandRequest(BaseModel):
+    command: str
+
+@app.get("/design_lab.html")
+def serve_design_lab_html():
+    p_lab = os.path.join(public_path, "design_lab.html")
+    if os.path.exists(p_lab):
+        return FileResponse(p_lab)
+    return HTMLResponse("<h2>Design Lab HTML not found</h2>", status_code=404)
+
+@app.get("/api/design/project")
+def get_design_project():
+    p_type = getattr(DesignState, "project_type", "car")
+    p_theme = getattr(DesignState, "active_theme", "")
+    return {
+        "project_name": DesignState.active_project,
+        "project_type": p_type,
+        "active_theme": p_theme,
+        "current_version": DesignState.current_version,
+        "components": DesignState.components,
+        "simulations": DesignState.simulations,
+        "ai_concepts": get_ai_concepts(p_type, p_theme),
+        "version_history": [
+            {
+                "version": v["version"],
+                "timestamp": v["timestamp"],
+                "description": v["description"]
+            }
+            for v in DesignState.version_history
+        ]
+    }
+
+@app.post("/api/design/command")
+def post_design_command(data: DesignCommandRequest):
+    try:
+        res = parse_design_command(data.command)
+        p_type = getattr(DesignState, "project_type", "car")
+        p_theme = getattr(DesignState, "active_theme", "")
+        res["project"] = {
+            "project_name": DesignState.active_project,
+            "project_type": p_type,
+            "active_theme": p_theme,
+            "current_version": DesignState.current_version,
+            "components": DesignState.components,
+            "simulations": DesignState.simulations,
+            "ai_concepts": get_ai_concepts(p_type, p_theme),
+            "version_history": [
+                {
+                    "version": v["version"],
+                    "timestamp": v["timestamp"],
+                    "description": v["description"]
+                }
+                for v in DesignState.version_history
+            ]
+        }
+        return res
+    except Exception as e:
+        return {"status": "error", "message": f"Design engine exception: {str(e)}"}
+
+@app.post("/api/camera/release")
+def release_backend_camera():
+    import sys
+    aria_instance = getattr(sys.modules.get('__main__'), 'instance', None)
+    if aria_instance:
+        aria_instance.airtouch_mode = True
+        if aria_instance.camera:
+            aria_instance.camera.release()
+            return {"status": "success", "message": "Camera released successfully"}
+    return {"status": "warning", "message": "ARIA instance not found, camera may not be released"}
+
+@app.post("/api/camera/acquire")
+def acquire_backend_camera():
+    import sys
+    aria_instance = getattr(sys.modules.get('__main__'), 'instance', None)
+    if aria_instance:
+        aria_instance.airtouch_mode = False
+        if aria_instance.camera:
+            aria_instance.camera.reacquire()
+            return {"status": "success", "message": "Camera reacquired successfully"}
+    return {"status": "warning", "message": "ARIA instance not found, camera may not be reacquired"}
 
 @app.get("/manifest.json")
 def get_manifest():
@@ -244,6 +1067,10 @@ def get_state():
         "degradation_mode": CAPABILITIES.degradation_mode,
         "capability_context": CAPABILITIES.cognition_context(),
         "presence_state": CognitionState.presence_state,
+        "ambient_active_tab": CognitionState.ambient_active_tab,
+        "ambient_context_entity": CognitionState.ambient_context_entity,
+        "ambient_widget_data": CognitionState.ambient_widget_data,
+        "ambient_last_updated": CognitionState.ambient_last_updated,
         "subsystem_health": _SUBSYSTEM_HEALTH.get_all() if _SUBSYSTEM_HEALTH else {},
     }
 
@@ -279,6 +1106,156 @@ def set_mode(data: ModeUpdate):
         CognitionState.mode = data.mode.lower()
         return {"status": "success", "mode": CognitionState.mode}
     return {"status": "error", "message": "Invalid mode"}
+
+class RegionTriggerUpdate(BaseModel):
+    region: str
+
+@app.post("/api/v1/dashboard/trigger-news")
+def trigger_news(data: RegionTriggerUpdate):
+    region = data.region or "Global"
+    import sys
+    import threading
+    main_mod = sys.modules.get('__main__')
+    aria = getattr(main_mod, 'instance', None)
+    if aria:
+        def search_bg():
+            query = f"latest news in {region}"
+            print(f"[DashboardAPI] Background news search for: {query}")
+            try:
+                # 1. Fetch news using ARIA search_and_read
+                raw_text = aria.search_and_read(query)
+                if not raw_text or raw_text.startswith("Could not fetch"):
+                    print(f"[DashboardAPI] Web search returned empty result for {region}")
+                    return
+                # Limit size to prevent LLM quota/token overflow
+                if len(raw_text) > 5000:
+                    raw_text = raw_text[:5000] + "\n...[truncated]"
+                
+                # 2. Build prompt requesting a NEWS_WIDGET
+                prompt = (
+                    f"The user clicked region: '{region}' on the map.\n\n"
+                    f"Here is search data from the web:\n---\n{raw_text}\n---\n\n"
+                    f"IMPORTANT: Return ONLY a compact JSON object — no prose, no markdown. Keep all string values SHORT.\n"
+                    f"Create a response with both a concise voice summary (1 sentence max) AND a compact JSON widget payload with view_type: NEWS_WIDGET.\n"
+                    f"You must return ONLY a valid JSON object (enclosed in ```json ... ```) with this structure:\n"
+                    f'{{\n'
+                    f'  "voice_summary": "Latest news headlines for {region}.",\n'
+                    f'  "widget_payload": {{\n'
+                    f'    "view_type": "NEWS_WIDGET",\n'
+                    f'    "payload": {{\n'
+                    f'      "articles": [\n'
+                    f'        {{ "headline": "headline text", "summary": "1 sentence summary", "source": "Source Name", "url": "URL link", "image_url": "", "category": "World", "sentiment": "positive|negative|neutral" }}\n'
+                    f'      ]\n'
+                    f'    }}\n'
+                    f'  }}\n'
+                    f'}}\n'
+                )
+                
+                # 3. Call LLM think
+                answer = aria.brain.think(prompt, user_name=aria.known_user)
+                
+                # 4. Parse JSON
+                import json
+                import re
+                clean_ans = answer.strip()
+                if "```" in clean_ans:
+                    m = re.search(r"```(?:json)?\s*(.*?)\s*```", clean_ans, re.DOTALL | re.IGNORECASE)
+                    if m:
+                        clean_ans = m.group(1).strip()
+                # Strip leading "json\n" etc.
+                if clean_ans.lower().startswith("json\n"):
+                    clean_ans = clean_ans[5:].strip()
+                elif clean_ans.lower().startswith("json "):
+                    clean_ans = clean_ans[5:].strip()
+                f_b = clean_ans.find("{")
+                l_b = clean_ans.rfind("}")
+                if f_b != -1 and l_b != -1:
+                    clean_ans = clean_ans[f_b:l_b+1]
+                
+                parsed = json.loads(clean_ans)
+                widget_payload = parsed.get("widget_payload", {})
+                view_type = widget_payload.get("view_type", "NEWS_WIDGET")
+                payload_data = widget_payload.get("payload", {})
+                
+                from skills.ambient_dashboard_controller import AmbientDashboardController
+                controller = AmbientDashboardController()
+                controller.push_widget_payload(view_type, payload_data)
+                print(f"[DashboardAPI] Background news search success for {region}")
+            except Exception as err:
+                print(f"[DashboardAPI] Background news search failed: {err}")
+                
+        threading.Thread(target=search_bg, daemon=True).start()
+        return {"status": "success", "message": f"Triggered background search for {region}"}
+    return {"status": "error", "message": "ARIA instance not found"}
+
+class TabUpdate(BaseModel):
+    tab: str
+    entity_id: Optional[str] = ""
+
+class WidgetDataUpdate(BaseModel):
+    view_type: str
+    refresh_interval_seconds: int = 30
+    payload: dict
+
+@app.post("/api/v1/viewport/set-tab")
+def set_tab(data: TabUpdate):
+    import time
+    CognitionState.ambient_active_tab = data.tab
+    CognitionState.ambient_context_entity = data.entity_id or ""
+    CognitionState.ambient_last_updated = int(time.time())
+    return {"status": "success", "tab": CognitionState.ambient_active_tab, "entity_id": CognitionState.ambient_context_entity}
+
+@app.post("/api/v1/viewport/widget-data")
+def set_widget_data(data: WidgetDataUpdate):
+    import time
+    CognitionState.ambient_widget_data = {
+        "view_type": data.view_type,
+        "refresh_interval_seconds": data.refresh_interval_seconds,
+        "payload": data.payload
+    }
+    # Map view_type to tab
+    tab_map = {
+        "SPORTS_WIDGET": "SPORTS",
+        "NEWS_WIDGET": "NEWS",
+        "WEATHER_WIDGET": "WEATHER",
+        "STOCK_WIDGET": "STOCKS",
+        "SEARCH_WIDGET": "SEARCH",
+        "PERSON_WIDGET": "PEOPLE",
+        "PRODUCT_WIDGET": "PRODUCTS",
+        "VIDEO_WIDGET": "VIDEOS",
+        "AMBIENT_WIDGET": "AMBIENT"
+    }
+    CognitionState.ambient_active_tab = tab_map.get(data.view_type, "AMBIENT")
+    # Set entity_id context based on view_type if present in payload
+    if data.view_type == "SPORTS_WIDGET":
+        CognitionState.ambient_context_entity = f"MATCH_{data.payload.get('match_title', '').replace(' ', '_')}"
+    elif data.view_type == "PERSON_WIDGET":
+        CognitionState.ambient_context_entity = f"PERSON_{data.payload.get('name', '').replace(' ', '_')}"
+    elif data.view_type == "PRODUCT_WIDGET":
+        CognitionState.ambient_context_entity = f"PROD_{data.payload.get('name', '').replace(' ', '_')}"
+    elif data.view_type == "WEATHER_WIDGET":
+        CognitionState.ambient_context_entity = data.payload.get("location", "")
+    
+    CognitionState.ambient_last_updated = int(time.time())
+    return {
+        "status": "success", 
+        "view_type": data.view_type, 
+        "tab": CognitionState.ambient_active_tab, 
+        "entity_id": CognitionState.ambient_context_entity
+    }
+
+@app.get("/api/v1/viewport/active-state")
+def get_viewport_active_state():
+    return {
+        "ambient_active_tab": CognitionState.ambient_active_tab,
+        "ambient_context_entity": CognitionState.ambient_context_entity,
+        "ambient_widget_data": CognitionState.ambient_widget_data,
+        "ambient_last_updated": CognitionState.ambient_last_updated
+    }
+
+@app.get("/api/ambient/data")
+def get_ambient_data():
+    return get_viewport_active_state()
 
 @app.get("/api/orchestration/campaigns")
 def get_campaigns():
@@ -476,1191 +1453,7 @@ def api_match_resume(req: MatchRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
-    html_content = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARIA Control Center</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Outfit', 'sans-serif'],
-                        mono: ['Space Mono', 'monospace'],
-                    }
-                }
-            }
-        }
-    </script>
-    <style>
-        body {
-            background-color: #050508;
-            font-family: 'Outfit', sans-serif;
-        }
-        .glass {
-            background: rgba(13, 13, 23, 0.7);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-        }
-        .glow-blue {
-            box-shadow: 0 0 25px rgba(59, 130, 246, 0.2);
-        }
-        .glow-purple {
-            box-shadow: 0 0 25px rgba(168, 85, 247, 0.2);
-        }
-        .status-pulse {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; filter: brightness(1.2); }
-            50% { opacity: .5; filter: brightness(0.8); }
-        }
-    </style>
-</head>
-<body class="text-gray-100 min-h-screen flex flex-col">
-
-    <!-- Header -->
-    <header class="glass glow-blue border-b border-blue-500/20 px-8 py-4 flex justify-between items-center z-10">
-        <div class="flex items-center gap-3">
-            <div class="w-3 h-3 rounded-full bg-cyan-400 status-pulse shadow-[0_0_10px_#22d3ee]"></div>
-            <h1 class="text-2xl font-extrabold tracking-wider bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
-                ARIA CONTROL CENTER
-            </h1>
-        </div>
-        <div class="flex items-center gap-4">
-            <span class="text-xs text-gray-400 font-mono">MODE SELECTOR:</span>
-            <div class="flex rounded-lg overflow-hidden border border-white/10 p-0.5 bg-black/40">
-                <button onclick="setMode('safe')" id="btn-safe" class="px-3 py-1 text-xs font-semibold rounded-md transition-all">SAFE</button>
-                <button onclick="setMode('auto')" id="btn-auto" class="px-3 py-1 text-xs font-semibold rounded-md transition-all">AUTO</button>
-                <button onclick="setMode('dev')" id="btn-dev" class="px-3 py-1 text-xs font-semibold rounded-md transition-all">DEV</button>
-            </div>
-            <div class="px-3 py-1 rounded bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400 font-mono" id="model-badge">
-                OLLAMA / QWEN2.5
-            </div>
-            <div class="px-3 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-xs text-amber-400 font-mono" id="profile-badge">
-                EXECUTIVE: AUTONOMOUS
-            </div>
-        </div>
-    </header>
-
-    <!-- Main Grid -->
-    <main class="flex-grow p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1800px] mx-auto w-full">
-        
-        <!-- Left Column: Visuals & Systems -->
-        <section class="lg:col-span-4 flex flex-col gap-6">
-            <!-- Screen Grounding Capture -->
-            <div class="glass p-5 rounded-2xl glow-blue flex flex-col gap-3">
-                <div class="flex justify-between items-center">
-                    <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Live Grounding Screen</h2>
-                    <span class="text-xs text-gray-500 font-mono" id="active-win-lbl">Desktop</span>
-                </div>
-                <div class="w-full aspect-[16/10] bg-black/40 rounded-lg overflow-hidden border border-white/5 relative flex items-center justify-center">
-                    <img id="screenshot-img" src="" alt="Live Desktop View" class="w-full h-full object-contain hidden" />
-                    <div id="no-screenshot-lbl" class="text-xs text-gray-500 font-mono flex flex-col items-center gap-2">
-                        <svg class="animate-pulse w-8 h-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                        </svg>
-                        Awaiting vision frame...
-                    </div>
-                </div>
-            </div>
-
-            <!-- Failure Analytics -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-red-400 uppercase font-mono">Failure Analytics</h2>
-                <div id="failure-analytics-list" class="flex flex-col gap-2 text-xs font-mono">
-                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No stability events recorded.</div>
-                </div>
-            </div>
-
-            <!-- Recent Diagnostics (Blackboard) -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-rose-500 uppercase font-mono">Recent Diagnostics</h2>
-                <div id="recent-diagnostics-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
-                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No active system failures.</div>
-                </div>
-            </div>
-
-            <!-- Recent Root Causes (Blackboard) -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-fuchsia-500 uppercase font-mono">Recent Root Causes</h2>
-                <div id="recent-rootcauses-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
-                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No root causes diagnosed.</div>
-                </div>
-            </div>
-
-            <!-- Recent Patch Plans (Blackboard) -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Recent Patch Plans</h2>
-                <div id="recent-patchplans-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
-                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patch plans proposed.</div>
-                </div>
-            </div>
-
-            <!-- Recent Patches (Blackboard) -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-violet-400 uppercase font-mono">Recent Patches</h2>
-                <div id="recent-patches-list" class="flex flex-col gap-2 text-xs font-mono overflow-y-auto max-h-[220px] pr-1">
-                    <div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patches generated.</div>
-                </div>
-            </div>
-
-            <!-- World State & Health Modeling -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
-                <h2 class="text-sm font-semibold tracking-wider text-emerald-400 uppercase font-mono">World State & Tool Health</h2>
-                <div class="grid grid-cols-2 gap-3 text-xs font-mono">
-                    <div class="p-2 rounded bg-white/5 border border-white/5">
-                        <span class="text-gray-500 text-[10px]">ACTIVE PROJECT</span>
-                        <div id="ws-project" class="text-emerald-400 font-semibold truncate">ARIA</div>
-                    </div>
-                    <div class="p-2 rounded bg-white/5 border border-white/5">
-                        <span class="text-gray-500 text-[10px]">BROWSER TABS</span>
-                        <div id="ws-tabs" class="text-emerald-400 font-semibold truncate">Dashboard</div>
-                    </div>
-                    <div class="p-2 rounded bg-white/5 border border-white/5">
-                        <span class="text-gray-500 text-[10px]">WORKFLOW</span>
-                        <div id="ws-workflow" class="text-emerald-400 font-semibold truncate">Idle</div>
-                    </div>
-                    <div class="p-2 rounded bg-white/5 border border-white/5">
-                        <span class="text-gray-500 text-[10px]">AGENT STATUS</span>
-                        <div id="ws-status" class="text-emerald-400 font-semibold truncate">Idle</div>
-                    </div>
-                </div>
-                
-                <div class="border-t border-white/5 pt-3 flex flex-col gap-2 text-xs font-mono">
-                    <div class="flex justify-between">
-                        <span class="text-gray-400">Success Rate:</span>
-                        <span id="health-success" class="text-emerald-400 font-bold">100%</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-400">Memory Latency:</span>
-                        <span id="health-mem-lat" class="text-cyan-400">0.01s</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-400">Vision Latency:</span>
-                        <span id="health-vis-lat" class="text-purple-400">0.00s</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-gray-400">Stuck Rate:</span>
-                        <span id="health-stuck" class="text-amber-400">0%</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Passive Notification Intelligence Triage -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-amber-400 uppercase font-mono">Attention & Triage Box</h2>
-                <div id="triage-notifications-list" class="flex flex-col gap-2 overflow-y-auto max-h-[150px] text-[10px] font-mono text-gray-400 pr-1">
-                    <div class="italic text-gray-500 text-center">Triage box empty. Silent notifications are batched here during tasks.</div>
-                </div>
-            </div>
-
-            <!-- Event Bus Cognition Stream -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Cognition Event Stream</h2>
-                <div id="event-ticker-list" class="flex flex-col gap-2 overflow-y-auto max-h-[180px] text-[10px] font-mono text-gray-400 pr-1">
-                    <div class="italic text-gray-500">Awaiting bus events...</div>
-                </div>
-            </div>
-
-            <!-- Stats -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
-                <h2 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">System Telemetry</h2>
-                <div class="flex flex-col gap-3">
-                    <div>
-                        <div class="flex justify-between text-xs font-mono text-gray-400 mb-1">
-                            <span>COGNITIVE LOAD</span>
-                            <span id="load-val" class="text-emerald-400 font-bold">NORMAL (0.10)</span>
-                        </div>
-                        <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden">
-                            <div id="load-bar" class="bg-gradient-to-r from-emerald-500 via-yellow-400 to-red-500 h-full transition-all duration-500" style="width: 10%"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="flex justify-between text-xs font-mono text-gray-400 mb-1">
-                            <span>CPU USAGE</span>
-                            <span id="cpu-val">0%</span>
-                        </div>
-                        <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden">
-                            <div id="cpu-bar" class="bg-gradient-to-r from-blue-500 to-cyan-400 h-full transition-all duration-500" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="flex justify-between text-xs font-mono text-gray-400 mb-1">
-                            <span>RAM ALLOCATION</span>
-                            <span id="ram-val">0%</span>
-                        </div>
-                        <div class="w-full bg-white/5 h-2 rounded-full overflow-hidden">
-                            <div id="ram-bar" class="bg-gradient-to-r from-purple-500 to-pink-500 h-full transition-all duration-500" style="width: 0%"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Middle Column: Cognition Monitor -->
-        <section class="lg:col-span-5 flex flex-col gap-6">
-            <!-- Active Goal -->
-            <div class="glass p-6 rounded-2xl glow-purple flex flex-col gap-4">
-                <div>
-                    <span class="text-[10px] font-bold tracking-widest text-purple-400 uppercase font-mono">Current Goal</span>
-                    <h2 class="text-xl font-bold tracking-tight text-white mt-1" id="goal-lbl">No active goal</h2>
-                </div>
-                
-                <div class="border-t border-white/5 pt-4">
-                    <span class="text-[10px] font-bold tracking-widest text-cyan-400 uppercase font-mono">Active Subtask / State</span>
-                    <p class="text-sm font-semibold text-gray-300 mt-1 font-mono" id="subtask-lbl">Idle</p>
-                </div>
-
-                <div class="border-t border-white/5 pt-4">
-                    <span class="text-[10px] font-bold tracking-widest text-amber-400 uppercase font-mono">Anticipatory Runtime Forecast</span>
-                    <p class="text-xs text-gray-400 mt-1 font-mono" id="forecast-lbl">No forecasts available (awaiting query...)</p>
-                </div>
-
-                <div class="border-t border-white/5 pt-4">
-                    <span class="text-[10px] font-bold tracking-widest text-emerald-400 uppercase font-mono">Deliberative Sandbox Simulation</span>
-                    <p class="text-xs text-gray-400 mt-1 font-mono" id="sandbox-lbl">No simulations active (idle...)</p>
-                </div>
-
-                <div class="flex gap-4 border-t border-white/5 pt-4">
-                    <div>
-                        <span class="text-[10px] font-bold tracking-widest text-gray-500 uppercase font-mono">Confidence</span>
-                        <div class="text-lg font-bold text-white font-mono" id="conf-lbl">1.00</div>
-                    </div>
-                    <div class="flex-grow">
-                        <span class="text-[10px] font-bold tracking-widest text-gray-500 uppercase font-mono">Self-Reflection Result</span>
-                        <p class="text-xs text-gray-400 mt-1 italic" id="reflection-lbl">No reflection logged.</p>
-                    </div>
-                </div>
-
-                <div class="border-t border-white/5 pt-4">
-                    <span class="text-[10px] font-bold tracking-widest text-red-400 uppercase font-mono">Causal Blame Diagnosis</span>
-                    <p class="text-xs text-gray-400 mt-1 font-mono text-gray-500" id="causal-lbl">No failures logged (system healthy)</p>
-                </div>
-            </div>
-
-            <!-- Memory Hits -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3 max-h-[200px] overflow-hidden">
-                <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Cognitive Memory Hits</h2>
-                <div id="memory-list" class="flex flex-col gap-2 overflow-y-auto max-h-[130px] pr-2 text-xs font-mono text-gray-400">
-                    <div class="p-3 rounded bg-white/5 border border-white/5 italic text-gray-500">No active memory references queried in this step.</div>
-                </div>
-            </div>
-
-            <!-- Career & Coding Tracker -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-4">
-                <div class="flex justify-between items-center border-b border-white/5 pb-2">
-                    <h2 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Career & DSA Tracker</h2>
-                    <div class="flex gap-2">
-                        <button onclick="openMatchModal()" class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[10px] border border-purple-500/30 hover:bg-purple-500/30 transition-all font-mono">MATCH RESUME</button>
-                        <button onclick="openAddJobModal()" class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] border border-cyan-500/30 hover:bg-cyan-500/30 transition-all font-mono">+ ADD JOB</button>
-                    </div>
-                </div>
-
-                <!-- Stats Widgets -->
-                <div class="grid grid-cols-2 gap-2 text-[10px] font-mono text-gray-400">
-                    <div class="p-2 rounded bg-white/5 border border-white/5 flex flex-col gap-1">
-                        <span class="text-gray-500 text-[8px]">GITHUB STREAK</span>
-                        <div id="gh-streak" class="text-emerald-400 font-bold text-xs truncate">Loading...</div>
-                        <div id="gh-weekly" class="text-[8px] text-gray-500 truncate">commits last 7d</div>
-                    </div>
-                    <div class="p-2 rounded bg-white/5 border border-white/5 flex flex-col gap-1">
-                        <span class="text-gray-500 text-[8px]">CODEFORCES</span>
-                        <div id="cf-rating" class="text-purple-400 font-bold text-xs truncate">Loading...</div>
-                        <div id="cf-rank" class="text-[8px] text-gray-500 truncate font-mono">rank info</div>
-                    </div>
-                </div>
-
-                <!-- Opportunities List -->
-                <div class="overflow-x-auto max-h-[180px]">
-                    <table class="w-full text-[11px] font-mono text-left">
-                        <thead>
-                            <tr class="text-gray-500 border-b border-white/5">
-                                <th class="pb-1.5 font-semibold">Company</th>
-                                <th class="pb-1.5 font-semibold">Role</th>
-                                <th class="pb-1.5 font-semibold">Status</th>
-                                <th class="pb-1.5 font-semibold">Score</th>
-                                <th class="pb-1.5 font-semibold text-right">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="career-opportunities-list">
-                            <tr>
-                                <td colspan="5" class="py-3 text-center text-gray-500 italic">No job tracking entries.</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </section>
-
-        <!-- Right Column: Action Replay Timeline + Cognitive Companion Panels -->
-        <section class="lg:col-span-3 flex flex-col gap-6">
-
-            <!-- Relationship Vector Panel -->
-            <div class="glass p-5 rounded-2xl glow-purple flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-pink-400 uppercase font-mono">Relationship Vector</h2>
-                <div class="grid grid-cols-2 gap-3 text-xs font-mono">
-                    <div class="p-2.5 rounded bg-white/5 border border-white/5">
-                        <span class="text-gray-500 text-[10px]">FAMILIARITY</span>
-                        <div id="rel-familiarity" class="text-pink-400 font-semibold">Acquaintance</div>
-                    </div>
-                    <div class="p-2.5 rounded bg-white/5 border border-white/5">
-                        <span class="text-gray-500 text-[10px]">INTERACTION DEPTH</span>
-                        <div id="rel-depth" class="text-purple-400 font-semibold">Surface-level</div>
-                    </div>
-                </div>
-                <div class="flex justify-between items-center text-xs font-mono border-t border-white/5 pt-2">
-                    <span class="text-gray-400">Quarantine Count:</span>
-                    <span id="quarantine-count" class="text-pink-400 font-bold">0</span>
-                </div>
-            </div>
-
-            <!-- Cognitive Governance Panel -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-amber-400 uppercase font-mono">Cognitive Governance</h2>
-                <div class="flex flex-col gap-2 text-xs font-mono">
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Sim Quarantine:</span>
-                        <span id="gov-sim-quarantine" class="text-amber-300 font-bold">0</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Drift Delta:</span>
-                        <span id="gov-drift-delta" class="text-cyan-300 font-bold">0.0000</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Volatility:</span>
-                        <span id="gov-volatility" class="text-emerald-300 font-semibold">Stable</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Versions:</span>
-                        <span id="gov-version" class="text-gray-300 truncate max-w-[170px]">personality_v0 / profile_v0</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Runtime:</span>
-                        <span id="gov-runtime" class="text-blue-300 font-semibold">SAFE_MODE</span>
-                    </div>
-                    <div class="text-[10px] text-gray-500 leading-snug" id="gov-capability-health">
-                        Capability health pending...
-                    </div>
-                </div>
-            </div>
-
-            <!-- Proactive Cognition Status Panel -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-3">
-                <h2 class="text-sm font-semibold tracking-wider text-teal-400 uppercase font-mono">Proactive Cognition</h2>
-                <div class="flex flex-col gap-2 text-xs font-mono">
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Cooldown:</span>
-                        <span id="proactive-cooldown" class="text-teal-400 font-bold">Ready</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Backoff Multiplier:</span>
-                        <span id="proactive-multiplier" class="text-teal-300 font-semibold">1.0x</span>
-                    </div>
-                    <div class="flex justify-between items-center">
-                        <span class="text-gray-400">Last Suggestion:</span>
-                        <span id="proactive-last" class="text-gray-300 truncate max-w-[180px]" title="">None</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Action Replay Timeline -->
-            <div class="glass p-5 rounded-2xl flex flex-col gap-4 min-h-[400px]">
-                <h2 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">Action Replay Timeline</h2>
-                <div id="timeline-container" class="flex-grow overflow-y-auto flex flex-col gap-4 pr-2 max-h-[600px] text-xs font-mono">
-                    <div class="flex gap-3 text-gray-500 italic p-4 text-center justify-center">
-                        Timeline empty. Run tasks to populate events.
-                    </div>
-                </div>
-            </div>
-        </section>
-
-    </main>
-
-    <!-- Footer -->
-    <footer class="mt-auto py-4 px-8 border-t border-white/5 flex justify-between text-xs text-gray-500 font-mono">
-        <span>ARIA Local-First Cognitive Desktop Environment</span>
-        <span>Observability Layer v1.0.0</span>
-    </footer>
-
-    <script>
-        async function fetchState() {
-            try {
-                const res = await fetch("/api/state");
-                const state = await res.json();
-                
-                // Update UI Texts
-                document.getElementById("goal-lbl").innerText = state.active_goal || "No active goal";
-                document.getElementById("subtask-lbl").innerText = state.active_subtask || "Idle";
-                document.getElementById("conf-lbl").innerText = Number(state.confidence).toFixed(2);
-                document.getElementById("model-badge").innerText = state.model_in_use.toUpperCase();
-                document.getElementById("active-win-lbl").innerText = state.active_window || "Desktop";
-                document.getElementById("reflection-lbl").innerText = state.reflection_results || "No reflection logged.";
-                
-                // Update World State UI
-                if (state.world_state) {
-                    document.getElementById("ws-project").innerText = state.world_state.active_project || "None";
-                    document.getElementById("ws-tabs").innerText = state.world_state.browser_tabs || "None";
-                    document.getElementById("ws-workflow").innerText = state.world_state.current_workflow || "None";
-                    document.getElementById("ws-status").innerText = state.world_state.agent_status || "None";
-                }
-                if (state.tool_health) {
-                    document.getElementById("health-success").innerText = state.tool_health.success_rate || "100%";
-                    document.getElementById("health-mem-lat").innerText = state.tool_health.memory_latency || "0.01s";
-                    document.getElementById("health-vis-lat").innerText = state.tool_health.vision_latency || "0.00s";
-                    document.getElementById("health-stuck").innerText = state.tool_health.stuck_rate || "0%";
-                }
-
-                // Update Cognitive Load UI
-                if (state.cognitive_load_status) {
-                    const lVal = document.getElementById("load-val");
-                    const scorePct = Math.min(state.cognitive_load_score * 100, 100);
-                    lVal.innerText = `${state.cognitive_load_status} (${Number(state.cognitive_load_score).toFixed(2)})`;
-                    
-                    // Style color dynamically
-                    if (state.cognitive_load_status === "OVERLOADED") {
-                        lVal.className = "text-red-400 font-bold";
-                    } else if (state.cognitive_load_status === "STRESSED") {
-                        lVal.className = "text-yellow-400 font-bold";
-                    } else {
-                        lVal.className = "text-emerald-400 font-bold";
-                    }
-                    document.getElementById("load-bar").style.width = scorePct + "%";
-                }
-
-                // Update CPU / RAM Bars
-                document.getElementById("cpu-val").innerText = state.cpu_usage + "%";
-                document.getElementById("cpu-bar").style.width = state.cpu_usage + "%";
-                document.getElementById("ram-val").innerText = state.ram_usage + "%";
-                document.getElementById("ram-bar").style.width = state.ram_usage + "%";
-                
-                // Update Mode Buttons active styles
-                updateModeButtons(state.mode);
-                
-                // Update Memory Hits List
-                const memList = document.getElementById("memory-list");
-                if (state.memory_hits && state.memory_hits.length > 0) {
-                    memList.innerHTML = state.memory_hits.map(hit => `
-                        <div class="p-2.5 rounded bg-black/40 border border-white/5 text-gray-300">
-                            ${hit}
-                        </div>
-                    `).join("");
-                } else {
-                    memList.innerHTML = `<div class="p-3 rounded bg-white/5 border border-white/5 italic text-gray-500">No active memory references queried in this step.</div>`;
-                }
-
-                // Update Failure Analytics List
-                try {
-                    const failRes = await fetch("/api/failures");
-                    const fails = await failRes.json();
-                    const failList = document.getElementById("failure-analytics-list");
-                    if (fails && fails.length > 0) {
-                        failList.innerHTML = fails.map(f => `
-                            <div class="flex justify-between items-center p-2 rounded bg-red-500/5 border border-red-500/10 text-red-400">
-                                <span>${f.type}</span>
-                                <span class="px-2 py-0.5 rounded bg-red-500/20 text-[10px] font-bold">${f.count}</span>
-                            </div>
-                        `).join("");
-                    } else {
-                        failList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No stability events recorded.</div>`;
-                    }
-                } catch(e) {
-                    console.error("Failures fetch error:", e);
-                }
-
-                // Update Recent Diagnostics List (Blackboard)
-                try {
-                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
-                    const diags = await diagRes.json();
-                    const diagList = document.getElementById("recent-diagnostics-list");
-                    
-                    let items = [];
-                    if (diags && diags.system) {
-                        // Gather keys starting with failure_
-                        items = Object.keys(diags.system)
-                            .filter(k => k.startsWith("failure_"))
-                            .map(k => diags.system[k].value);
-                    }
-                    
-                    // Sort items by timestamp descending
-                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-                    
-                    if (items.length > 0) {
-                        diagList.innerHTML = items.map(item => {
-                            let sevColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
-                            if (item.severity === "HIGH") {
-                                sevColor = "text-red-400 bg-red-500/10 border-red-500/20";
-                            } else if (item.severity === "MEDIUM") {
-                                sevColor = "text-amber-400 bg-amber-500/10 border-amber-500/20";
-                            }
-                            
-                            const filename = item.failed_file ? item.failed_file.split(/[\\/]/).pop() : "unknown.py";
-                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
-                            
-                            return `
-                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                                    <div class="flex justify-between items-center">
-                                        <span class="font-bold text-gray-200 truncate max-w-[150px]" title="${item.failed_file}">${filename}</span>
-                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${sevColor}">${item.severity}</span>
-                                    </div>
-                                    <div class="text-[10px] text-gray-400 flex flex-col gap-0.5">
-                                        <div><span class="text-gray-500">Error:</span> <span class="text-rose-300 font-semibold">${item.error_type}</span></div>
-                                        <div><span class="text-gray-500">Line:</span> ${item.failed_line} | <span class="text-gray-500">Func:</span> ${item.failed_function}</div>
-                                        <div class="truncate text-gray-500" title="${item.error_message}">${item.error_message}</div>
-                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
-                                            <span>${item.campaign_id}</span>
-                                            <span>${dateStr}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join("");
-                    } else {
-                        diagList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No active system failures.</div>`;
-                    }
-                } catch(e) {
-                    console.error("Diagnostics fetch error:", e);
-                }
-
-                // Update Recent Root Causes List (Blackboard)
-                try {
-                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
-                    const diags = await diagRes.json();
-                    const rcList = document.getElementById("recent-rootcauses-list");
-                    
-                    let items = [];
-                    if (diags && diags.system) {
-                        // Gather keys starting with rootcause_
-                        items = Object.keys(diags.system)
-                            .filter(k => k.startsWith("rootcause_"))
-                            .map(k => diags.system[k].value);
-                    }
-                    
-                    // Sort items by timestamp descending
-                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-                    
-                    if (items.length > 0) {
-                        rcList.innerHTML = items.map(item => {
-                            let sevColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
-                            const confPct = Math.round(item.confidence * 100);
-                            if (confPct >= 85) {
-                                sevColor = "text-red-400 bg-red-500/10 border-red-500/20";
-                            } else if (confPct >= 65) {
-                                sevColor = "text-amber-400 bg-amber-500/10 border-amber-500/20";
-                            }
-                            
-                            const filename = item.failed_file ? item.failed_file.split(/[\\/]/).pop() : "unknown.py";
-                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
-                            const evidenceList = (item.evidence || []).map(e => `<li class="list-disc ml-3.5 mt-0.5 leading-snug">• ${e}</li>`).join("");
-                            
-                            return `
-                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                                    <div class="flex justify-between items-center">
-                                        <span class="font-bold text-gray-200 truncate max-w-[150px]" title="${item.failed_file}">${filename}</span>
-                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${sevColor}">Conf: ${confPct}%</span>
-                                    </div>
-                                    <div class="text-[10px] text-gray-400 flex flex-col gap-1">
-                                        <div><span class="text-gray-500">Category:</span> <span class="text-fuchsia-300 font-semibold font-mono">${item.fix_category}</span></div>
-                                        <div class="text-gray-300"><span class="text-gray-500">Cause:</span> ${item.root_cause}</div>
-                                        <div class="text-emerald-350 bg-emerald-950/20 border border-emerald-800/10 p-1.5 rounded mt-1 font-sans text-[9px] leading-snug">
-                                            <span class="font-bold uppercase tracking-wider text-emerald-400">Strategy:</span> ${item.recommended_strategy}
-                                        </div>
-                                        ${evidenceList ? `
-                                        <div class="mt-1 border-t border-white/5 pt-1 text-[9px] text-gray-500">
-                                            <span class="font-semibold text-gray-400">Evidence:</span>
-                                            <ul class="flex flex-col gap-0.5 mt-0.5 pl-1 leading-snug">
-                                                ${evidenceList}
-                                            </ul>
-                                        </div>
-                                        ` : ''}
-                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
-                                            <span>${item.campaign_id}</span>
-                                            <span>${dateStr}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join("");
-                    } else {
-                        rcList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No root causes diagnosed.</div>`;
-                    }
-                } catch(e) {
-                    console.error("Root causes fetch error:", e);
-                }
-
-                // Update Recent Patch Plans List (Blackboard)
-                try {
-                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
-                    const diags = await diagRes.json();
-                    const planList = document.getElementById("recent-patchplans-list");
-                    
-                    let items = [];
-                    if (diags && diags.system) {
-                        items = Object.keys(diags.system)
-                            .filter(k => k.startsWith("patchplan_"))
-                            .map(k => diags.system[k].value);
-                    }
-                    
-                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-                    
-                    if (items.length > 0) {
-                        planList.innerHTML = items.map(item => {
-                            const filename = item.failed_file ? item.failed_file.split(/[\\/]/).pop() : "unknown.py";
-                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
-                            let typeColor = "text-cyan-400 bg-cyan-500/10 border-cyan-500/20";
-                            if (item.edit_type === "INSERT") {
-                                typeColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
-                            } else if (item.edit_type === "DELETE") {
-                                typeColor = "text-rose-400 bg-rose-500/10 border-rose-500/20";
-                            }
-                            
-                            return `
-                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                                    <div class="flex justify-between items-center">
-                                        <span class="font-bold text-gray-200 truncate max-w-[150px]" title="${item.failed_file}">${filename}</span>
-                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${typeColor}">${item.edit_type}</span>
-                                    </div>
-                                    <div class="text-[10px] text-gray-400 flex flex-col gap-1">
-                                        <div>
-                                            <span class="text-gray-500">Scope:</span> <span class="text-amber-400 font-mono font-bold">${item.estimated_scope || "LINE"}</span>
-                                            | <span class="text-gray-500">Target Func:</span> <span class="text-cyan-300 font-mono">${item.target_function}</span>
-                                        </div>
-                                        <div><span class="text-gray-500">Location:</span> <span class="text-gray-350">${item.target_location}</span></div>
-                                        <div class="text-gray-300"><span class="text-gray-500">Goal:</span> ${item.goal}</div>
-                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
-                                            <span>${item.campaign_id}</span>
-                                            <span>${dateStr}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join("");
-                    } else {
-                        planList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patch plans proposed.</div>`;
-                    }
-                } catch(e) {
-                    console.error("Patch plans fetch error:", e);
-                }
-
-                // Update Recent Patches List (Blackboard)
-                try {
-                    const diagRes = await fetch("/api/orchestration/blackboard?topic=system");
-                    const diags = await diagRes.json();
-                    const patchList = document.getElementById("recent-patches-list");
-                    
-                    let items = [];
-                    if (diags && diags.system) {
-                        items = Object.keys(diags.system)
-                            .filter(k => k.startsWith("patch_"))
-                            .map(k => diags.system[k].value);
-                    }
-                    
-                    items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-                    
-                    if (items.length > 0) {
-                        patchList.innerHTML = items.map(item => {
-                            const filename = item.target_file ? item.target_file.split(/[\\/]/).pop() : "unknown.py";
-                            const dateStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : "";
-                            
-                            let riskColor = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
-                            if (item.risk_level === "CRITICAL") {
-                                riskColor = "text-red-500 bg-red-600/10 border-red-650/20 font-extrabold animate-pulse";
-                            } else if (item.risk_level === "HIGH") {
-                                riskColor = "text-red-400 bg-red-500/10 border-red-500/20";
-                            } else if (item.risk_level === "MEDIUM") {
-                                riskColor = "text-amber-400 bg-amber-500/10 border-amber-500/20";
-                            }
-                            
-                            const confPct = Math.round(item.confidence * 100);
-                            const rcConf = item.confidence_source ? Math.round(item.confidence_source.root_cause * 100) : 0;
-                            const staticConf = item.confidence_source ? Math.round(item.confidence_source.static_checks * 100) : 0;
-                            const llmConf = item.confidence_source ? Math.round(item.confidence_source.llm_patch * 100) : 0;
-                            
-                            const linesStr = (item.affected_lines || []).join(", ");
-                            
-                            // Escape HTML in code snippets to avoid rendering issues
-                            const escapeHtml = (str) => (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                            const origEscaped = escapeHtml(item.original_snippet);
-                            const propEscaped = escapeHtml(item.proposed_snippet);
-                            
-                            return `
-                                <div class="p-2.5 rounded bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                                    <div class="flex justify-between items-center">
-                                        <span class="font-bold text-gray-200 truncate max-w-[140px]" title="${item.target_file}">${filename}</span>
-                                        <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold ${riskColor}">${item.risk_level} RISK</span>
-                                    </div>
-                                    <div class="text-[10px] text-gray-400 flex flex-col gap-1">
-                                        <div>
-                                            <span class="text-gray-500">Type:</span> <span class="text-violet-350 font-semibold font-mono">${item.patch_type}</span>
-                                            ${linesStr ? ` | <span class="text-gray-500">Lines:</span> <span class="text-gray-300 font-mono">${linesStr}</span>` : ''}
-                                        </div>
-                                        <div class="text-gray-300"><span class="text-gray-500">Rationale:</span> ${item.rationale || "None"}</div>
-                                        
-                                        <!-- Confidence breakdown -->
-                                        <div class="bg-white/5 p-1.5 rounded mt-1 border border-white/5 flex flex-col gap-1 text-[9px]">
-                                            <div class="flex justify-between text-gray-300 font-bold border-b border-white/5 pb-0.5">
-                                                <span>Combined Confidence:</span>
-                                                <span class="text-violet-400">${confPct}%</span>
-                                            </div>
-                                            <div class="grid grid-cols-3 gap-1 text-center text-gray-500 text-[8px] font-mono">
-                                                <div>
-                                                    <div class="text-gray-400 font-bold">${rcConf}%</div>
-                                                    <div>Root Cause</div>
-                                                </div>
-                                                <div>
-                                                    <div class="text-gray-400 font-bold">${staticConf}%</div>
-                                                    <div>Static</div>
-                                                </div>
-                                                <div>
-                                                    <div class="text-gray-400 font-bold">${llmConf}%</div>
-                                                    <div>LLM Patch</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        
-                                        <!-- Diff Snippets Preview -->
-                                        <div class="mt-1 flex flex-col gap-1 text-[9px] font-mono">
-                                            ${origEscaped ? `
-                                            <div class="bg-red-950/20 border border-red-900/10 p-1.5 rounded text-red-300 overflow-x-auto max-h-[60px]">
-                                                <div class="text-[8px] text-red-500 font-bold border-b border-red-900/20 pb-0.5 mb-0.5">- ORIGINAL</div>
-                                                <pre class="leading-tight">${origEscaped}</pre>
-                                            </div>` : ''}
-                                            ${propEscaped ? `
-                                            <div class="bg-emerald-950/20 border border-emerald-900/10 p-1.5 rounded text-emerald-300 overflow-x-auto max-h-[80px]">
-                                                <div class="text-[8px] text-emerald-500 font-bold border-b border-emerald-900/20 pb-0.5 mb-0.5">+ PROPOSED</div>
-                                                <pre class="leading-tight">${propEscaped}</pre>
-                                            </div>` : ''}
-                                        </div>
-
-                                        <div class="text-[9px] text-gray-600 flex justify-between mt-1 border-t border-white/5 pt-1">
-                                            <span>${item.campaign_id}</span>
-                                            <span>${dateStr}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join("");
-                    } else {
-                        patchList.innerHTML = `<div class="p-2 rounded bg-white/5 border border-white/5 italic text-gray-500">No patches generated.</div>`;
-                    }
-                } catch(e) {
-                    console.error("Patches fetch error:", e);
-                }
-
-                // Update Attention Triage Ticker
-                if (state.pending_notifications) {
-                    const triList = document.getElementById("triage-notifications-list");
-                    if (state.pending_notifications.length > 0) {
-                        triList.innerHTML = state.pending_notifications.map(n => `
-                            <div class="p-1.5 rounded bg-amber-500/5 border border-amber-500/10 flex justify-between items-center text-amber-300">
-                                <span class="truncate">[${n.type.toUpperCase()}] ${JSON.stringify(n.data)}</span>
-                                <span class="text-[8px] text-gray-500 flex-shrink-0">${n.time}</span>
-                            </div>
-                        `).reverse().join("");
-                    } else {
-                        triList.innerHTML = `<div class="italic text-gray-500 text-center">Triage box empty. Silent notifications are batched here during tasks.</div>`;
-                    }
-                }
-
-                // Update Event Bus ticker
-                try {
-                    const eventRes = await fetch("/api/events");
-                    const evs = await eventRes.json();
-                    const evList = document.getElementById("event-ticker-list");
-                    if (evs && evs.length > 0) {
-                        evList.innerHTML = evs.map(ev => {
-                            let badgeColor = "bg-blue-500/20 text-blue-400";
-                            if (ev.type.includes("FAILED")) badgeColor = "bg-red-500/20 text-red-400";
-                            if (ev.type.includes("COMPLETED")) badgeColor = "bg-emerald-500/20 text-emerald-400";
-                            if (ev.type.includes("EXECUTED")) badgeColor = "bg-purple-500/20 text-purple-400";
-                            if (ev.type.includes("VERIFIED")) badgeColor = "bg-cyan-500/20 text-cyan-400";
-                            
-                            return `
-                                <div class="p-1.5 rounded bg-white/5 border border-white/5 flex gap-2 items-center justify-between">
-                                    <div class="flex items-center gap-1.5 truncate">
-                                        <span class="px-1 py-0.5 rounded text-[8px] font-bold ${badgeColor}">${ev.type}</span>
-                                        <span class="text-gray-300 truncate">${JSON.stringify(ev.data)}</span>
-                                    </div>
-                                    <span class="text-gray-600 text-[8px] flex-shrink-0">${ev.time}</span>
-                                </div>
-                            `;
-                        }).reverse().join("");
-                    } else {
-                        evList.innerHTML = `<div class="italic text-gray-500 text-center">Awaiting bus events...</div>`;
-                    }
-                } catch(e) {
-                    console.error("Events fetch error:", e);
-                }
-
-                // Update Timeline Logs
-                const timeline = document.getElementById("timeline-container");
-                if (state.last_actions && state.last_actions.length > 0) {
-                    timeline.innerHTML = state.last_actions.map(act => `
-                        <div class="flex gap-3 border-l-2 border-purple-500/30 pl-3 relative py-1">
-                            <div class="w-2.5 h-2.5 rounded-full bg-purple-500 absolute -left-[6px] top-2 shadow-[0_0_8px_#a855f7]"></div>
-                            <div class="flex-grow">
-                                <div class="flex justify-between items-center text-[10px] text-gray-500 mb-0.5">
-                                    <span>${act.time}</span>
-                                    <span class="text-purple-400">conf: ${Number(act.confidence).toFixed(2)}</span>
-                                </div>
-                                <div class="text-xs text-gray-200 font-semibold">${act.action}</div>
-                                <div class="text-[10px] text-emerald-400 mt-0.5">Status: ${act.status}</div>
-                            </div>
-                        </div>
-                    `).join("");
-                } else {
-                    timeline.innerHTML = `<div class="flex gap-3 text-gray-500 italic p-4 text-center justify-center">Timeline empty. Run tasks to populate events.</div>`;
-                }
-
-                // Update Relationship Vector Panel
-                if (state.familiarity_label) {
-                    document.getElementById("rel-familiarity").innerText = state.familiarity_label;
-                }
-                if (state.interaction_depth_label) {
-                    document.getElementById("rel-depth").innerText = state.interaction_depth_label;
-                }
-
-                // Update Proactive Cognition Panel
-                if (state.proactive_status) {
-                    const cdEl = document.getElementById("proactive-cooldown");
-                    const lastEl = document.getElementById("proactive-last");
-                    if (state.proactive_status.on_cooldown) {
-                        cdEl.innerText = state.proactive_status.remaining_label;
-                        cdEl.className = "text-amber-400 font-bold";
-                    } else {
-                        cdEl.innerText = "Ready";
-                        cdEl.className = "text-teal-400 font-bold";
-                    }
-                    lastEl.innerText = state.proactive_status.last_suggestion || "None";
-                    lastEl.title = state.proactive_status.last_suggestion || "";
-                }
-                
-                if (state.cooldown_multiplier !== undefined) {
-                    document.getElementById("proactive-multiplier").innerText = state.cooldown_multiplier.toFixed(1) + "x";
-                }
-                if (state.quarantine_count !== undefined) {
-                    document.getElementById("quarantine-count").innerText = state.quarantine_count;
-                }
-
-                // Update Cognitive Governance Panel
-                if (state.simulated_anomalies_quarantined !== undefined) {
-                    document.getElementById("gov-sim-quarantine").innerText = state.simulated_anomalies_quarantined;
-                }
-                if (state.drift_delta_score !== undefined) {
-                    document.getElementById("gov-drift-delta").innerText = Number(state.drift_delta_score).toFixed(4);
-                }
-                if (state.emotional_volatility) {
-                    const alerts = state.emotional_volatility.alerts || [];
-                    const volatile = state.emotional_volatility.trust_volatile ||
-                        state.emotional_volatility.comfort_volatile ||
-                        state.emotional_volatility.trust_spike_detected ||
-                        state.emotional_volatility.comfort_collapse_detected;
-                    const volEl = document.getElementById("gov-volatility");
-                    volEl.innerText = volatile ? alerts.map(a => a.type).join(", ") || "Alert" : "Stable";
-                    volEl.className = volatile ? "text-red-400 font-bold" : "text-emerald-300 font-semibold";
-                }
-                if (state.cognitive_version !== undefined) {
-                    const version = state.cognitive_version;
-                    document.getElementById("gov-version").innerText = typeof version === "object"
-                        ? `${version.personality || "personality_v0"} / ${version.profile || "profile_v0"}`
-                        : `profile_v${version}`;
-                }
-                if (state.degradation_mode !== undefined) {
-                    document.getElementById("gov-runtime").innerText = state.degradation_mode;
-                    document.getElementById("gov-runtime").title = state.capability_context || "";
-                }
-                if (state.capability_health !== undefined) {
-                    const healthRows = Object.values(state.capability_health).map(h =>
-                        `${h.name}: ${h.status} (${Number(h.confidence).toFixed(2)})`
-                    );
-                    document.getElementById("gov-capability-health").innerText = healthRows.join(" | ");
-                }
-
-                // Update Screenshot Frame
-                const img = document.getElementById("screenshot-img");
-                const noImgLbl = document.getElementById("no-screenshot-lbl");
-                if (state.screenshot_available) {
-                    // Update image source by appending cache buster to trigger re-render
-                    img.src = "/api/screenshot?t=" + new Date().getTime();
-                    img.classList.remove("hidden");
-                    noImgLbl.classList.add("hidden");
-                } else {
-                    img.classList.add("hidden");
-                    noImgLbl.classList.remove("hidden");
-                }
-                
-                // Fetch career stats and opportunities
-                await fetchCareerData();
-                
-            } catch(e) {
-                console.error("Dashboard fetch error:", e);
-            }
-        }
-
-        async function setMode(mode) {
-            try {
-                await fetch("/api/mode", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ mode: mode })
-                });
-                fetchState();
-            } catch(e) {
-                console.error("Mode update error:", e);
-            }
-        }
-
-        function updateModeButtons(activeMode) {
-            ["safe", "auto", "dev"].forEach(m => {
-                const btn = document.getElementById("btn-" + m);
-                if (activeMode === m) {
-                    btn.className = "px-3 py-1 text-xs font-semibold rounded-md transition-all bg-blue-500 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]";
-                } else {
-                    btn.className = "px-3 py-1 text-xs font-semibold rounded-md transition-all text-gray-400 hover:text-white hover:bg-white/5";
-                }
-            });
-        }
-
-        // Career functions
-        async function fetchCareerData() {
-            try {
-                // 1. Fetch coding/dsa stats
-                const statsRes = await fetch("/api/career/stats");
-                const stats = await statsRes.json();
-                
-                
-                if (stats.github && !stats.github.error) {
-                    document.getElementById("gh-streak").innerText = stats.github.streak + " Days";
-                    document.getElementById("gh-weekly").innerText = stats.github.weekly_commits + " commits last 7d";
-                } else {
-                    document.getElementById("gh-streak").innerText = "0 Days";
-                    document.getElementById("gh-weekly").innerText = stats.github?.error || "API failed";
-                }
-                
-                if (stats.codeforces && !stats.codeforces.error) {
-                    document.getElementById("cf-rating").innerText = stats.codeforces.rating + " Rating";
-                    document.getElementById("cf-rank").innerText = `${stats.codeforces.rank} (max ${stats.codeforces.max_rating})`;
-                } else {
-                    document.getElementById("cf-rating").innerText = "Unrated";
-                    document.getElementById("cf-rank").innerText = stats.codeforces?.error || "API failed";
-                }
-                
-                // 2. Fetch opportunities list
-                const oppsRes = await fetch("/api/career/opportunities");
-                const opps = await oppsRes.json();
-                const oppsList = document.getElementById("career-opportunities-list");
-                
-                if (opps && opps.length > 0) {
-                    oppsList.innerHTML = opps.map(o => {
-                        const scoreText = o.match_score !== null ? `${Math.round(o.match_score)}%` : "N/A";
-                        const linkHtml = o.apply_link ? `<a href="${o.apply_link}" target="_blank" class="text-cyan-400 hover:underline">Apply</a>` : "N/A";
-                        
-                        return `
-                            <tr class="border-b border-white/5 hover:bg-white/5 transition-colors">
-                                <td class="py-2 text-white font-semibold">${o.company}</td>
-                                <td class="py-2 text-gray-300">${o.role}</td>
-                                <td class="py-2">
-                                    <select onchange="updateJobStatus(${o.id}, this.value)" class="bg-black/50 border border-white/10 rounded px-1 text-[10px] text-gray-300 focus:outline-none">
-                                        <option value="bookmarked" ${o.status === 'bookmarked' ? 'selected' : ''}>Bookmarked</option>
-                                        <option value="applied" ${o.status === 'applied' ? 'selected' : ''}>Applied</option>
-                                        <option value="interviewing" ${o.status === 'interviewing' ? 'selected' : ''}>Interviewing</option>
-                                        <option value="rejected" ${o.status === 'rejected' ? 'selected' : ''}>Rejected</option>
-                                        <option value="offered" ${o.status === 'offered' ? 'selected' : ''}>Offered</option>
-                                    </select>
-                                </td>
-                                <td class="py-2 text-purple-400 font-bold">${scoreText}</td>
-                                <td class="py-2 text-right">${linkHtml}</td>
-                            </tr>
-                        `;
-                    }).join("");
-                } else {
-                    oppsList.innerHTML = `<tr><td colspan="5" class="py-3 text-center text-gray-500 italic">No job tracking entries.</td></tr>`;
-                }
-            } catch (e) {
-                console.error("Error fetching career data:", e);
-            }
-        }
-        
-        async function updateJobStatus(oppId, newStatus) {
-            try {
-                await fetch(`/api/career/opportunities/${oppId}/status`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ status: newStatus })
-                });
-                fetchCareerData();
-            } catch (e) {
-                console.error("Error updating job status:", e);
-            }
-        }
-        
-        function openAddJobModal() {
-            document.getElementById("add-job-modal").classList.remove("hidden");
-        }
-        
-        function closeAddJobModal() {
-            document.getElementById("add-job-modal").classList.add("hidden");
-            document.getElementById("job-company").value = "";
-            document.getElementById("job-role").value = "";
-            document.getElementById("job-location").value = "";
-            document.getElementById("job-link").value = "";
-            document.getElementById("job-deadline").value = "";
-        }
-        
-        async function submitJob() {
-            const company = document.getElementById("job-company").value.trim();
-            const role = document.getElementById("job-role").value.trim();
-            if (!company || !role) {
-                alert("Company and Role are required.");
-                return;
-            }
-            const location = document.getElementById("job-location").value;
-            const link = document.getElementById("job-link").value;
-            const deadline = document.getElementById("job-deadline").value;
-            
-            try {
-                await fetch("/api/career/opportunities", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        company: company,
-                        role: role,
-                        location: location,
-                        apply_link: link,
-                        deadline: deadline
-                    })
-                });
-                closeAddJobModal();
-                fetchCareerData();
-            } catch (e) {
-                console.error("Error submitting job:", e);
-            }
-        }
-        
-        function openMatchModal() {
-            document.getElementById("match-modal").classList.remove("hidden");
-        }
-        
-        function closeMatchModal() {
-            document.getElementById("match-modal").classList.add("hidden");
-            document.getElementById("match-description").value = "";
-            document.getElementById("match-results-box").classList.add("hidden");
-        }
-        
-        async function runMatch() {
-            const desc = document.getElementById("match-description").value.trim();
-            if (!desc) {
-                alert("Please enter a job description.");
-                return;
-            }
-            
-            document.getElementById("match-loading").classList.remove("hidden");
-            document.getElementById("btn-run-match").disabled = true;
-            document.getElementById("match-results-box").classList.add("hidden");
-            
-            try {
-                const res = await fetch("/api/career/match", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ description: desc })
-                });
-                const data = await res.json();
-                
-                document.getElementById("match-result-score").innerText = (data.match_score || 0) + "%";
-                document.getElementById("match-result-matching").innerText = (data.matching_skills || []).join(", ") || "None";
-                document.getElementById("match-result-gaps").innerText = (data.gaps || []).join(", ") || "None";
-                document.getElementById("match-result-recs").innerText = (data.recommendations || []).join(", ") || "None";
-                
-                document.getElementById("match-results-box").classList.remove("hidden");
-            } catch (e) {
-                console.error("Error running match:", e);
-                alert("Match evaluation failed.");
-            } finally {
-                document.getElementById("match-loading").classList.add("hidden");
-                document.getElementById("btn-run-match").disabled = false;
-            }
-        }
-
-        // Poll API every 2 seconds
-        setInterval(fetchState, 2000);
-        window.onload = fetchState;
-    </script>
-
-    <!-- Add Job Modal -->
-    <div id="add-job-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="glass max-w-md w-full p-6 rounded-2xl flex flex-col gap-4 border border-cyan-500/20">
-            <h3 class="text-sm font-semibold tracking-wider text-cyan-400 uppercase font-mono">Bookmark Job Opportunity</h3>
-            <div class="flex flex-col gap-3 text-xs">
-                <div class="flex flex-col gap-1">
-                    <label class="text-gray-400">Company Name</label>
-                    <input type="text" id="job-company" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Google">
-                </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-gray-400">Role Title</label>
-                    <input type="text" id="job-role" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Software Engineer Intern">
-                </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-gray-400">Location</label>
-                    <input type="text" id="job-location" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. Mountain View, CA">
-                </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-gray-400">Apply Link URL</label>
-                    <input type="text" id="job-link" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="https://careers.google.com/...">
-                </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-gray-400">Deadline (YYYY-MM-DD)</label>
-                    <input type="text" id="job-deadline" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-cyan-500" placeholder="e.g. 2026-10-31">
-                </div>
-            </div>
-            <div class="flex justify-end gap-2 text-xs font-mono mt-2">
-                <button onclick="closeAddJobModal()" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-gray-300">Cancel</button>
-                <button onclick="submitJob()" class="px-3 py-1.5 rounded bg-cyan-500 text-black font-semibold">Save</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Match Resume Modal -->
-    <div id="match-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="glass max-w-lg w-full p-6 rounded-2xl flex flex-col gap-4 border border-purple-500/20">
-            <h3 class="text-sm font-semibold tracking-wider text-purple-400 uppercase font-mono">LLM Resume Matcher</h3>
-            <div class="flex flex-col gap-3 text-xs">
-                <div class="flex flex-col gap-1">
-                    <label class="text-gray-400">Target Job Description</label>
-                    <textarea id="match-description" rows="6" class="p-2 rounded bg-white/5 border border-white/10 text-white focus:outline-none focus:border-purple-500 resize-none" placeholder="Paste the job description or requirements here..."></textarea>
-                </div>
-                <div id="match-results-box" class="hidden p-3 rounded bg-white/5 border border-white/5 flex flex-col gap-2 font-mono">
-                    <div class="flex justify-between font-bold">
-                        <span>MATCH SCORE:</span>
-                        <span id="match-result-score" class="text-purple-400">0%</span>
-                    </div>
-                    <div class="text-[10px]">
-                        <span class="text-emerald-400 font-semibold">MATCHING:</span>
-                        <div id="match-result-matching" class="text-gray-300 mt-0.5 font-sans"></div>
-                    </div>
-                    <div class="text-[10px] mt-1">
-                        <span class="text-red-400 font-semibold">GAPS:</span>
-                        <div id="match-result-gaps" class="text-gray-300 mt-0.5 font-sans"></div>
-                    </div>
-                    <div class="text-[10px] mt-1">
-                        <span class="text-amber-400 font-semibold">RECOMMENDATIONS:</span>
-                        <div id="match-result-recs" class="text-gray-300 mt-0.5 font-sans"></div>
-                    </div>
-                </div>
-            </div>
-            <div class="flex justify-between items-center text-xs font-mono mt-2">
-                <span id="match-loading" class="hidden text-purple-300 animate-pulse">Deliberating...</span>
-                <div class="flex justify-end gap-2 ml-auto">
-                    <button onclick="closeMatchModal()" class="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-gray-300">Close</button>
-                    <button id="btn-run-match" onclick="runMatch()" class="px-3 py-1.5 rounded bg-purple-500 text-white font-semibold">Run Match</button>
-                </div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>"""
-    return HTMLResponse(content=html_content)
+    p_cc = os.path.join(public_path, "control_center.html")
+    if os.path.exists(p_cc):
+        return FileResponse(p_cc)
+    return HTMLResponse("<h2>No control center template found on server</h2>", status_code=404)

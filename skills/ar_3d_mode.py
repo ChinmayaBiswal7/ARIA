@@ -285,6 +285,8 @@ class AR3DMode:
         os.environ["VTK_SILENCE_GET_VOID_POINTER_WARNINGS"] = "1"
         os.environ["VTKWEB_DISABLE_LOGGING"] = "1"
 
+        print("[AR3D Profiler] Thread started. Starting imports...")
+        t_import = time.time()
         try:
             import vedo
             from vedo import Plotter, Sphere, load, Assembly, Text2D
@@ -292,13 +294,17 @@ class AR3DMode:
             print("[AR3D] vedo not installed. Run: pip install vedo")
             self._running = False
             return
+        print(f"[AR3D Profiler] Imports completed in {time.time() - t_import:.3f}s")
 
+        print("[AR3D Profiler] Creating Plotter...")
+        t_plotter = time.time()
         plt = vedo.Plotter(title="ARIA AR 3D Hologram",
                            bg="black", bg2=(0, 0, 40),
                            size=(900, 700),
                            offscreen=False)
         plt.renderer.SetAmbient((0.3, 0.3, 0.3))
         self._plt = plt
+        print(f"[AR3D Profiler] Plotter created in {time.time() - t_plotter:.3f}s")
 
         # Default model (solid sphere + wireframe overlay)
         solid = vedo.Sphere(r=1, c="cyan", alpha=0.6)
@@ -341,7 +347,11 @@ class AR3DMode:
             alpha=0.9
         )
         
+        print("[AR3D Profiler] Calling Plotter.show...")
+        t_show = time.time()
         plt.show(assembly[0], help_overlay, gesture_overlay, interactive=False, resetcam=True)
+        print(f"[AR3D Profiler] Plotter.show completed in {time.time() - t_show:.3f}s")
+
 
         prev_hand_pos = None
         prev_hand_size = None

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARIA Design Lab // FRIDAY Engineering Studio</title>
+  
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet" />
+  
+  <!-- Core Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  
+  <!-- MediaPipe Gesture Tracking -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <!-- External Stylesheet -->
+  <link rel="stylesheet" href="/public/design_lab.css?v=1" />
+</head>
+<body class="">
+
+  <!-- Floating HUD Toggle -->
+  <button id="btn-hud-toggle" class="btn-hud-toggle" onclick="toggleImmersiveMode()" title="Toggle Holographic HUD (Key: H, Tab, or Esc)">⬡ HUD</button>
+
+  <!-- Top Bar -->
+  <header>
+    <div class="logo-container">
+      <div class="logo-glow"></div>
+      <h1>ARIA Design Lab // Engineering Studio</h1>
+    </div>
+    <div class="stats-summary">
+      <div class="stat-box">
+        <div class="stat-label">Project</div>
+        <div class="stat-value" id="hdr-project">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label" id="hdr-stat-label">Model Drag</div>
+        <div class="stat-value" id="hdr-drag">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Active Version</div>
+        <div class="stat-value" id="hdr-ver">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">System State</div>
+        <div class="stat-value" id="hdr-status" style="color: var(--warn);">IDLE</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <div class="studio-grid">
+    
+    <!-- Left Sidebar: Project tree & Versioning -->
+    <div class="sidebar-left">
+      <!-- Project Components Tree -->
+      <div class="hud-panel" style="flex: 1.2; display: flex; flex-direction: column;">
+        <div class="panel-header">
+          <span class="panel-title">Project Tree</span>
+        </div>
+        <div class="tree-scroll" id="project-tree-container">
+          <div class="tree-node selected" id="node-body" onclick="selectComponent('body')">
+            <span>Body Cockpit</span>
+            <span class="tree-node-meta" id="meta-body">-</span>
+          </div>
+          <div class="tree-node" id="node-engine" onclick="selectComponent('engine')">
+            <span>Engine Block</span>
+            <span class="tree-node-meta" id="meta-engine">-</span>
+          </div>
+          <div class="tree-node" id="node-wheels" onclick="selectComponent('wheels')">
+            <span>Wheel Assembly</span>
+            <span class="tree-node-meta" id="meta-wheels">-</span>
+          </div>
+          <div class="tree-node" id="node-spoiler" onclick="selectComponent('spoiler')">
+            <span>Spoiler Wing</span>
+            <span class="tree-node-meta" id="meta-spoiler">-</span>
+          </div>
+          <div class="tree-node" id="node-chassis" onclick="selectComponent('chassis')">
+            <span>Chassis Frame</span>
+            <span class="tree-node-meta" id="meta-chassis">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Version history -->
+      <div class="hud-panel" style="flex: 1; display: flex; flex-direction: column;">
+        <div class="panel-header">
+          <span class="panel-title">Version History</span>
+        </div>
+        <div class="history-list" id="version-list-container">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Center: 3D Viewport -->
+    <div class="viewport-container hud-panel">
+      <!-- Sci-fi digital scanlines and scanning laser sweep overlays -->
+      <div class="scanlines-overlay"></div>
+      <div class="laser-scanline"></div>
+      
+      <div class="viewport-overlay">
+        <div class="target-reticle">// HOLOGRAPHIC DIAGNOSTICS ACTIVE</div>
+      </div>
+      
+      <!-- Webcam Hand gestures overlay stream -->
+      <div class="pip-window" id="pip-gesture-window">
+        <video id="webcam-video" autoplay playsinline></video>
+      </div>
+
+      <!-- View Controls -->
+      <div class="view-controls">
+        <button class="btn-control active" id="btn-shade-solid" onclick="setViewMode('solid')">Solid</button>
+        <button class="btn-control" id="btn-shade-wire" onclick="setViewMode('wire')">Wireframe</button>
+        <button class="btn-control" id="btn-shade-xray" onclick="setViewMode('xray')">X-Ray</button>
+        <button class="btn-control" id="btn-explode" onclick="toggleExplode()">Explode</button>
+        <button class="btn-control" id="btn-gesture" onclick="toggleGestureTracking()" style="border-color: var(--warn); color: var(--warn);">Gesture Tracker</button>
+      </div>
+
+      <canvas id="canvas3d"></canvas>
+    </div>
+
+    <!-- Right Sidebar: Inspector & AI Choices & Simulations -->
+    <div class="sidebar-right">
+      <!-- Attributes Inspector -->
+      <div class="hud-panel" style="flex: 1.2; display: flex; flex-direction: column;">
+        <div class="panel-header">
+          <span class="panel-title">Inspector</span>
+        </div>
+        <div class="inspector-content" id="inspector-container">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Simulation Overlays -->
+      <div class="hud-panel glow-orange" style="flex: 0.6; display: flex; flex-direction: column;">
+        <div class="panel-header">
+          <span class="panel-title" style="color: var(--warn);">Simulation Overlay</span>
+        </div>
+        <div class="sim-panel">
+          <button class="btn-sim" id="btn-sim-airflow" onclick="toggleSimulation('airflow')">Airflow</button>
+          <button class="btn-sim" id="btn-sim-weight" onclick="toggleSimulation('weight')">Weight</button>
+          <button class="btn-sim" id="btn-sim-stability" onclick="toggleSimulation('stability')">Stability</button>
+          <button class="btn-sim" id="btn-sim-thermal" onclick="toggleSimulation('heat_map')">Thermal</button>
+        </div>
+      </div>
+
+      <!-- AI suggestions -->
+      <div class="hud-panel" style="flex: 1.2; display: flex; flex-direction: column;">
+        <div class="panel-header">
+          <span class="panel-title">AI Co-Designer Suggestions</span>
+        </div>
+        <div class="concept-gallery" id="ai-suggestions-container">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom: Command console -->
+    <div class="console-panel hud-panel">
+      <div class="console-logs" id="console-logs-container">
+        <div class="log-line">
+          <span class="log-prefix">[System]</span>
+          <span class="log-text">FRIDAY Design Studio online. Input command or hold mic icon to dictate...</span>
+        </div>
+      </div>
+      <div class="console-input-row">
+        <button class="btn-mic" id="btn-mic-dictate" onclick="toggleVoiceSpeech()" title="Dictate voice command" style="margin-right: 8px;">🎤</button>
+        <button class="btn-mic" id="btn-mic-handsfree" onclick="toggleHandsFree()" title="Toggle continuous hands-free listening (Wake Word: ARIA)" style="margin-right: 8px; border-color: var(--accent); color: var(--accent); background: rgba(0, 240, 255, 0.1);">📡</button>
+        <div class="console-input-container">
+          <input type="text" class="console-input" id="console-cmd-input" placeholder="Type engineering command (e.g. 'change body color to cyan', 'move engine back 30cm', 'airflow simulation')..." />
+        </div>
+        <button class="btn-send" onclick="sendConsoleCommand()">Send</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Design Studio Script -->
+  <script src="/public/design_lab.js?v=1"></script>
+</body>
+</html>

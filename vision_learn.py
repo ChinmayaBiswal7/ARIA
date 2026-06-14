@@ -17,11 +17,10 @@ from datetime import datetime
 
 
 # ── Optional YOLO ─────────────────────────────────────────────────────────────
-try:
-    from ultralytics import YOLO as _YOLO
-    _YOLO_AVAILABLE = True
-except ImportError:
-    _YOLO_AVAILABLE = False
+# We check for availability via find_spec (fast, doesn't load/import the module)
+# and only import it inside the background thread to prevent blocking boot.
+import importlib.util
+_YOLO_AVAILABLE = importlib.util.find_spec("ultralytics") is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +54,7 @@ class VisionLearner:
         if _YOLO_AVAILABLE:
             def _load_yolo():
                 try:
+                    from ultralytics import YOLO as _YOLO
                     self.yolo = _YOLO("yolov8n.pt")   # auto-downloads ~6 MB on first run
                     print("[Vision] YOLOv8n loaded.")
                 except Exception as e:

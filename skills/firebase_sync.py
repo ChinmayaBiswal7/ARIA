@@ -245,6 +245,7 @@ class FirebaseSync:
     def __init__(self, command_callback=None):
         self.callback         = command_callback
         self.enabled          = False
+        self.status           = "IDLE"
         self.project_id       = ""
         self.running          = False
         self.last_cmd_id      = None
@@ -261,6 +262,9 @@ class FirebaseSync:
         self.screenshot_quality = "medium"
         self.health_skill     = HealthSkill()
         self.vault_dir        = "data/knowledge_vault"
+        self._vscode_bridge_skill = None
+        self._browser_attachment_skill = None
+        self.last_activity_time = 0.0
         self._load_config()
 
     # ── Config ────────────────────────────────────────────────────────────────
@@ -339,6 +343,82 @@ class FirebaseSync:
             print("[FirebaseSync] OAuth2 access token refreshed.")
         return token
 
+    def _get_telemetry(self):
+        cpu_percent = 0.0
+        ram_gb = 0.0
+        try:
+            import psutil
+            cpu_percent = psutil.cpu_percent()
+            ram_gb = psutil.virtual_memory().used / (1024.0 ** 3)
+        except Exception:
+            pass
+
+        vscode_connected = False
+        chrome_connected = False
+        vscode_active_file = ""
+        vscode_git_branch = ""
+        vscode_errors = 0
+        vscode_warnings = 0
+        chrome_active_title = ""
+        chrome_active_url = ""
+
+        try:
+            from skills.vscode_bridge_skill import AriaVsCodeBridgeSkill
+            if not getattr(self, "_vscode_bridge_skill", None):
+                self._vscode_bridge_skill = AriaVsCodeBridgeSkill()
+            skill = self._vscode_bridge_skill
+            vscode_connected = skill.is_bridge_server_alive()
+            if vscode_connected:
+                snap = skill.get_workspace_snapshot()
+                if snap:
+                    full_path = snap.get("active_file", "")
+                    vscode_active_file = os.path.basename(full_path) if full_path else ""
+                    vscode_git_branch = snap.get("git_branch", "")
+                    vscode_errors = snap.get("error_count", 0)
+                    vscode_warnings = snap.get("warning_count", 0)
+        except Exception:
+            pass
+
+        chrome_tabs_count = 0
+        try:
+            from skills.browser_attachment_skill import AriaBrowserAttachmentSkill
+            if not getattr(self, "_browser_attachment_skill", None):
+                self._browser_attachment_skill = AriaBrowserAttachmentSkill()
+            skill = self._browser_attachment_skill
+            chrome_connected = skill.is_chrome_debuggable()
+            if chrome_connected:
+                # Throttle Chrome tab sync to once every 12 seconds to save CPU/CDP overhead
+                now_t = time.time()
+                last_sync = getattr(self, "_last_chrome_tab_sync", 0.0)
+                if now_t - last_sync >= 12.0:
+                    try:
+                        skill.sync_live_tabs()
+                    except Exception:
+                        pass
+                    self._last_chrome_tab_sync = now_t
+
+                tabs = skill.get_tab_list(limit=500)
+                chrome_tabs_count = len(tabs)
+                if tabs:
+                    chrome_active_title = tabs[0].get("tab_title", "")
+                    chrome_active_url = tabs[0].get("tab_url", "")
+        except Exception:
+            pass
+
+        return {
+            "cpu_percent":          cpu_percent,
+            "ram_gb":               ram_gb,
+            "vscode_connected":     vscode_connected,
+            "chrome_connected":     chrome_connected,
+            "vscode_active_file":   vscode_active_file,
+            "vscode_git_branch":    vscode_git_branch,
+            "vscode_errors":        vscode_errors,
+            "vscode_warnings":      vscode_warnings,
+            "chrome_active_title":  chrome_active_title,
+            "chrome_active_url":    chrome_active_url,
+            "chrome_tabs_count":    chrome_tabs_count
+        }
+
     # ── Status update ─────────────────────────────────────────────────────────
     def update_status(self, message, status_str="idle"):
         """Pushes status update back to Firestore (phone sees this)."""
@@ -356,56 +436,74 @@ class FirebaseSync:
 
         command_id = getattr(self, "current_command_id", None)
 
-        sw, sh = 1920, 1080
-        try:
-            import pyautogui
-            sw, sh = pyautogui.size()
-        except Exception:
-            pass
-
-        if self.firestore_client:
+        def _do_update_async():
+            sw, sh = 1920, 1080
             try:
-                data = {
-                    "status":             status_str,
-                    "last_response":      message,
-                    "timestamp":          time.time(),
-                    "reply_target":       "phone" if command_id else "laptop",
-                    "screen_w":           sw,
-                    "screen_h":           sh,
-                    "screenshot_quality": self.screenshot_quality,
-                }
-                if command_id:
-                    data["command_id"] = command_id
-                self.firestore_client.collection("status").document("latest").set(data)
-                return
-            except Exception as e:
-                print(f"[FirebaseSync] SDK status update failed: {e}")
-
-        # REST fallback
-        url = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
-               f"/databases/(default)/documents/status/latest")
-        payload = {"fields": {
-            "status":             {"stringValue": status_str},
-            "last_response":      {"stringValue": message},
-            "timestamp":          {"doubleValue": time.time()},
-            "reply_target":       {"stringValue": "phone" if command_id else "laptop"},
-            "screen_w":           {"integerValue": sw},
-            "screen_h":           {"integerValue": sh},
-            "screenshot_quality": {"stringValue": self.screenshot_quality},
-        }}
-        if command_id:
-            payload["fields"]["command_id"] = {"stringValue": command_id}
-        try:
-            headers = {"Content-Type": "application/json"}
-            token = self._get_bearer_token()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-            req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                         headers=headers, method="PATCH")
-            with urllib.request.urlopen(req, timeout=10):
+                import pyautogui
+                sw, sh = pyautogui.size()
+            except Exception:
                 pass
-        except Exception as e:
-            print(f"[FirebaseSync] REST status update failed: {e}")
+
+            telemetry = self._get_telemetry()
+
+            if self.firestore_client:
+                try:
+                    data = {
+                        "status":             status_str,
+                        "last_response":      message,
+                        "timestamp":          time.time(),
+                        "reply_target":       "phone" if command_id else "laptop",
+                        "screen_w":           sw,
+                        "screen_h":           sh,
+                        "screenshot_quality": self.screenshot_quality,
+                    }
+                    data.update(telemetry)
+                    if command_id:
+                        data["command_id"] = command_id
+                    self.firestore_client.collection("status").document("latest").set(data, merge=True)
+                    return
+                except Exception as e:
+                    print(f"[FirebaseSync] SDK status update failed: {e}")
+
+            # REST fallback
+            url = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
+                   f"/databases/(default)/documents/status/latest")
+            payload = {"fields": {
+                "status":             {"stringValue": status_str},
+                "last_response":      {"stringValue": message},
+                "timestamp":          {"doubleValue": time.time()},
+                "reply_target":       {"stringValue": "phone" if command_id else "laptop"},
+                "screen_w":           {"integerValue": sw},
+                "screen_h":           {"integerValue": sh},
+                "screenshot_quality": {"stringValue": self.screenshot_quality},
+                "cpu_percent":        {"doubleValue": telemetry["cpu_percent"]},
+                "ram_gb":             {"doubleValue": telemetry["ram_gb"]},
+                "vscode_connected":   {"booleanValue": telemetry["vscode_connected"]},
+                "chrome_connected":   {"booleanValue": telemetry["chrome_connected"]},
+                "vscode_active_file": {"stringValue": telemetry["vscode_active_file"]},
+                "vscode_git_branch":  {"stringValue": telemetry["vscode_git_branch"]},
+                "vscode_errors":      {"integerValue": telemetry["vscode_errors"]},
+                "vscode_warnings":    {"integerValue": telemetry["vscode_warnings"]},
+                "chrome_active_title":{"stringValue": telemetry["chrome_active_title"]},
+                "chrome_active_url":  {"stringValue": telemetry["chrome_active_url"]},
+                "chrome_tabs_count":  {"integerValue": telemetry["chrome_tabs_count"]},
+            }}
+            if command_id:
+                payload["fields"]["command_id"] = {"stringValue": command_id}
+            try:
+                headers = {"Content-Type": "application/json"}
+                token = self._get_bearer_token()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                             headers=headers, method="PATCH")
+                with urllib.request.urlopen(req, timeout=10):
+                    pass
+            except Exception as e:
+                print(f"[FirebaseSync] REST status update failed: {e}")
+
+        import threading
+        threading.Thread(target=_do_update_async, daemon=True).start()
 
     # ── SDK real-time snapshot callback ───────────────────────────────────────
     def _on_sdk_snapshot(self, doc_snapshot, changes, read_time):
@@ -427,6 +525,9 @@ class FirebaseSync:
                 continue
 
             if self._is_fresh_command(cmd_id, cmd_text, cmd_ts):
+                self.last_activity_time = time.time()
+                if cmd_text == "[PING]":
+                    continue
                 print(f"[FirebaseSync] SDK command received: '{cmd_text}' (id={cmd_id})")
                 threading.Thread(target=self._execute_remote_command,
                                  args=(cmd_text, image_b64, cmd_id), daemon=True).start()
@@ -470,6 +571,9 @@ class FirebaseSync:
                         continue
 
                     if self._is_fresh_command(cmd_id, cmd_text, cmd_ts):
+                        self.last_activity_time = time.time()
+                        if cmd_text == "[PING]":
+                            continue
                         print(f"[FirebaseSync] REST command received: '{cmd_text}' (id={cmd_id})")
                         threading.Thread(target=self._execute_remote_command,
                                          args=(cmd_text, image_b64, cmd_id), daemon=True).start()
@@ -564,7 +668,12 @@ class FirebaseSync:
                 consecutive_errors += 1
                 print(f"[FirebaseSync] Unexpected polling error: {e}")
 
-            time.sleep(2.0)
+            # Yield CPU/network if voice listening is active
+            aria = self._get_aria_instance()
+            if aria and aria.voice and hasattr(aria.voice, "listening_active") and aria.voice.listening_active.is_set():
+                time.sleep(5.0)
+            else:
+                time.sleep(2.0)
 
     # ── Command execution ─────────────────────────────────────────────────────
     def _execute_remote_command(self, cmd_text, image_b64=None, cmd_id=None):
@@ -613,32 +722,88 @@ class FirebaseSync:
         finally:
             self.current_command_id = None
 
+    def _grab_screen(self):
+        # Method 1: mss (Fastest, ~10ms)
+        try:
+            import mss
+            from PIL import Image
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                sct_img = sct.grab(monitor)
+                img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+                if img:
+                    return img
+        except Exception as e:
+            print(f"[FirebaseSync] mss screen grab failed: {e}")
+
+        # Method 2: PIL ImageGrab
+        try:
+            from PIL import ImageGrab
+            img = ImageGrab.grab()
+            if img:
+                return img
+        except Exception as e:
+            print(f"[FirebaseSync] PIL ImageGrab failed: {e}")
+
+        # Method 3: PyAutoGUI
+        try:
+            import pyautogui
+            img = pyautogui.screenshot()
+            if img:
+                return img
+        except Exception as e:
+            print(f"[FirebaseSync] PyAutoGUI screen grab failed: {e}")
+
+        # Method 4: PyQt5 (if QApplication is running)
+        try:
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                screen = app.primaryScreen()
+                if screen:
+                    qpixmap = screen.grabWindow(0)
+                    import io
+                    from PIL import Image
+                    buf = io.BytesIO()
+                    qpixmap.save(buf, "PNG")
+                    buf.seek(0)
+                    img = Image.open(buf)
+                    img.load()  # Force load image data
+                    if img:
+                        return img
+        except Exception as e:
+            print(f"[FirebaseSync] PyQt5 screen grab failed: {e}")
+
+        raise Exception("All screenshot grab methods failed")
+
     def capture_and_upload_screenshot(self):
         """Captures the current screen, compresses it, and updates Firestore doc status/latest."""
         try:
-            import pyautogui
             import io
             import base64
             from PIL import Image
 
-            # Take screenshot
-            img = pyautogui.screenshot()
+            # Take screenshot using robust multi-tier fallback
+            img = self._grab_screen()
             
-            # Set target width, height, and JPEG compression quality based on preference
+            is_active = (time.time() - getattr(self, 'last_activity_time', 0.0)) < 45.0
+            
+            # Set target width, height, and JPEG compression quality based on preference and activity state
             if self.screenshot_quality == "low":
                 w, h = 800, 450
-                quality = 50
+                quality = 35 if is_active else 15
             elif self.screenshot_quality == "high":
                 w, h = 1440, 810
-                quality = 80
+                quality = 65 if is_active else 40
             else:  # medium
                 w, h = 1120, 630
-                quality = 65
+                quality = 45 if is_active else 25
 
-            # Resize and save
-            img = img.resize((w, h))
+            # Resize using bilinear for speed & quality and save optimized JPEG
+            resample_filter = getattr(Image, "Resampling", Image).BILINEAR
+            img = img.resize((w, h), resample=resample_filter)
             buf = io.BytesIO()
-            img.save(buf, format='JPEG', quality=quality)
+            img.save(buf, format='JPEG', quality=quality, optimize=True)
             b64 = base64.b64encode(buf.getvalue()).decode()
             
             # Write to Firestore
@@ -667,50 +832,84 @@ class FirebaseSync:
         """Periodically uploads screenshot to Firebase so phone sees PC screen updates."""
         print("[FirebaseSync] Screenshot loop started.")
         while self.running:
-            # Wait 5 seconds between periodic uploads
-            for _ in range(50):
+            # 1. Determine active vs standby sleep time
+            is_active = (time.time() - getattr(self, 'last_activity_time', 0.0)) < 45.0
+            sleep_time = 0.25 if is_active else 3.0
+            
+            # 2. Segmented sleep to maintain clean thread shutdown responsiveness
+            steps = int(sleep_time / 0.05)
+            for _ in range(steps):
                 if not self.running:
-                    break
-                time.sleep(0.1)
-            if self.running:
-                # Slow down poll rate if voice session is active (yield CPU/network)
-                main_mod = __import__('__main__')
-                aria = getattr(main_mod, 'instance', None) or getattr(main_mod, 'aria_instance', None)
-                if aria and aria.voice and (aria.voice.is_speaking or getattr(aria.voice, 'vad_detecting_speech', False)):
-                    if not getattr(self, "_paused_ss_log", False):
-                        print("[FirebaseSync] Voice session active. Yielding screenshot loop (sleeping 3.0s)...")
-                        self._paused_ss_log = True
-                    time.sleep(3.0)
-                    continue
-                self._paused_ss_log = False
-                self.capture_and_upload_screenshot()
+                    return
+                time.sleep(0.05)
+                
+            if not self.running:
+                return
+
+            # 3. Yield CPU/network if voice session is active
+            aria = self._get_aria_instance()
+            if aria and aria.voice and (
+                aria.voice.is_speaking
+                or getattr(aria.voice, 'recording_active', False)
+                or getattr(aria.voice, 'vad_detecting_speech', False)
+                or (hasattr(aria.voice, "listening_active") and aria.voice.listening_active.is_set())
+            ):
+                if not getattr(self, "_paused_ss_log", False):
+                    print("[FirebaseSync] Voice session active. Yielding screenshot loop (sleeping 1.0s)...")
+                    self._paused_ss_log = True
+                time.sleep(1.0)
+                continue
+            self._paused_ss_log = False
+
+            # 4. Capture and upload
+            self.capture_and_upload_screenshot()
 
     # ── Heartbeat Loop ────────────────────────────────────────────────────────
     def _heartbeat_loop(self):
         """Periodically updates status timestamp so phone client knows the server is alive."""
         print("[FirebaseSync] Heartbeat loop started.")
         while self.running:
+            telemetry = self._get_telemetry()
             if self.firestore_client:
                 try:
                     doc_ref = self.firestore_client.collection("status").document("latest")
-                    # Try to only update timestamp to preserve current message/state
-                    doc_ref.update({"timestamp": time.time()})
+                    update_data = {
+                        "timestamp": time.time(),
+                    }
+                    update_data.update(telemetry)
+                    doc_ref.update(update_data)
                 except Exception:
                     # Fallback to set if doc doesn't exist yet
                     try:
                         doc_ref.set({
                             "status": "idle",
                             "last_response": "ARIA online. How can I help you?",
-                            "timestamp": time.time()
-                        })
+                            "timestamp": time.time(),
+                            **telemetry
+                        }, merge=True)
                     except Exception as ex:
                         print(f"[FirebaseSync] Heartbeat set failed: {ex}")
             else:
                 # REST PATCH updateMask
+                fields_to_update = ["timestamp", "cpu_percent", "ram_gb", "vscode_connected", "chrome_connected", 
+                                    "vscode_active_file", "vscode_git_branch", "vscode_errors", "vscode_warnings", 
+                                    "chrome_active_title", "chrome_active_url", "chrome_tabs_count"]
+                mask_query = "&".join([f"updateMask.fieldPaths={f}" for f in fields_to_update])
                 url = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
-                       f"/databases/(default)/documents/status/latest?updateMask.fieldPaths=timestamp")
+                       f"/databases/(default)/documents/status/latest?{mask_query}")
                 payload = {"fields": {
-                    "timestamp": {"doubleValue": time.time()}
+                    "timestamp":          {"doubleValue": time.time()},
+                    "cpu_percent":        {"doubleValue": telemetry["cpu_percent"]},
+                    "ram_gb":             {"doubleValue": telemetry["ram_gb"]},
+                    "vscode_connected":   {"booleanValue": telemetry["vscode_connected"]},
+                    "chrome_connected":   {"booleanValue": telemetry["chrome_connected"]},
+                    "vscode_active_file": {"stringValue": telemetry["vscode_active_file"]},
+                    "vscode_git_branch":  {"stringValue": telemetry["vscode_git_branch"]},
+                    "vscode_errors":      {"integerValue": telemetry["vscode_errors"]},
+                    "vscode_warnings":    {"integerValue": telemetry["vscode_warnings"]},
+                    "chrome_active_title":{"stringValue": telemetry["chrome_active_title"]},
+                    "chrome_active_url":  {"stringValue": telemetry["chrome_active_url"]},
+                    "chrome_tabs_count":  {"integerValue": telemetry["chrome_tabs_count"]},
                 }}
                 try:
                     headers = {"Content-Type": "application/json"}
@@ -723,7 +922,12 @@ class FirebaseSync:
                         pass
                 except Exception as e:
                     print(f"[FirebaseSync] REST heartbeat failed: {e}")
-            time.sleep(3.0)
+            # Yield CPU/network if voice listening is active
+            aria = self._get_aria_instance()
+            if aria and aria.voice and hasattr(aria.voice, "listening_active") and aria.voice.listening_active.is_set():
+                time.sleep(8.0)
+            else:
+                time.sleep(3.0)
 
     # ── Start / Stop ──────────────────────────────────────────────────────────
     def start(self):
@@ -734,57 +938,80 @@ class FirebaseSync:
             print("[FirebaseSync] Invalid project_id in firebase_config.json.")
             return
 
+        self.status = "INITIALIZING"
         self.running = True
         self.command_start_cutoff_ms = time.time() * 1000
 
-        # Start background heartbeat thread
-        self.hb_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        self.hb_thread.start()
-
-        # Start background screenshot thread
-        self.ss_thread = threading.Thread(target=self._screenshot_loop, daemon=True)
-        self.ss_thread.start()
-
-        # 1. Try firebase-admin SDK (real-time, no polling)
-        if self._init_sdk():
+        def _start_background():
             try:
-                doc_ref = self.firestore_client.collection("commands").document("latest")
-                self.listener = doc_ref.on_snapshot(self._on_sdk_snapshot)
-                
-                health_ref = self.firestore_client.collection("health").document("latest")
-                self.health_listener = health_ref.on_snapshot(self._on_health_snapshot)
+                # Start background heartbeat thread
+                self.hb_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+                self.hb_thread.start()
 
-                scans_ref = self.firestore_client.collection("scanned_documents")
-                scans_query = scans_ref.where("synced_to_pc", "==", False)
-                self.scans_listener = scans_query.on_snapshot(self._on_scans_snapshot)
-                
-                self.update_status("ARIA online. Ready.", status_str="idle")
-                print("[FirebaseSync] Real-time SDK listener started. OK")
+                # Start background screenshot thread
+                self.ss_thread = threading.Thread(target=self._screenshot_loop, daemon=True)
+                self.ss_thread.start()
 
-                # Also start voice audio listener for phone push-to-talk
-                try:
-                    from skills.api_integrations import APIIntegrations
-                    integrations = APIIntegrations()
-                    self._voice_listener = VoiceAudioListener(
-                        self.firestore_client, self.callback, integrations
-                    )
-                    self._voice_listener.start()
-                except Exception as ve:
-                    print(f"[FirebaseSync] VoiceAudioListener init failed: {ve}")
+                # 1. Try firebase-admin SDK (real-time, no polling)
+                if self._init_sdk():
+                    try:
+                        doc_ref = self.firestore_client.collection("commands").document("latest")
+                        self.listener = doc_ref.on_snapshot(self._on_sdk_snapshot)
+                        
+                        health_ref = self.firestore_client.collection("health").document("latest")
+                        self.health_listener = health_ref.on_snapshot(self._on_health_snapshot)
 
-                return
+                        scans_ref = self.firestore_client.collection("scanned_documents")
+                        scans_query = scans_ref.where("synced_to_pc", "==", False)
+                        self.scans_listener = scans_query.on_snapshot(self._on_scans_snapshot)
+                        
+                        self.update_status("ARIA online. Ready.", status_str="idle")
+                        print("[FirebaseSync] Real-time SDK listener started. OK")
+
+                        # Also start voice audio listener for phone push-to-talk
+                        try:
+                            from skills.api_integrations import APIIntegrations
+                            integrations = APIIntegrations()
+                            self._voice_listener = VoiceAudioListener(
+                                self.firestore_client, self.callback, integrations
+                            )
+                            self._voice_listener.start()
+                        except Exception as ve:
+                            print(f"[FirebaseSync] VoiceAudioListener init failed: {ve}")
+
+                        # Start WebRTC stream server
+                        try:
+                            from skills.webrtc_stream import AriaWebRtcStreamServer
+                            self._webrtc_server = AriaWebRtcStreamServer(self.firestore_client)
+                            self._webrtc_server.start()
+                        except Exception as we:
+                            print(f"[FirebaseSync] Failed to initialize WebRTC server: {we}")
+
+                        self.status = "READY"
+                        return
+                    except Exception as e:
+                        print(f"[FirebaseSync] SDK listener failed: {e}. Falling back to REST polling.")
+
+                # 2. Fallback: authenticated REST polling
+                self.thread = threading.Thread(target=self._poll_rest_loop, daemon=True)
+                self.thread.start()
+                self.status = "READY"
             except Exception as e:
-                print(f"[FirebaseSync] SDK listener failed: {e}. Falling back to REST polling.")
+                print(f"[FirebaseSync] Background start failed: {e}")
+                self.status = "FAILED"
 
-        # 2. Fallback: authenticated REST polling
-        self.thread = threading.Thread(target=self._poll_rest_loop, daemon=True)
-        self.thread.start()
+        threading.Thread(target=_start_background, daemon=True).start()
 
     def stop(self):
         self.running = False
         if hasattr(self, '_voice_listener') and self._voice_listener:
             try:
                 self._voice_listener.stop()
+            except Exception:
+                pass
+        if hasattr(self, '_webrtc_server') and self._webrtc_server:
+            try:
+                self._webrtc_server.stop()
             except Exception:
                 pass
         if self.listener:
@@ -802,6 +1029,43 @@ class FirebaseSync:
                 self.scans_listener.unsubscribe()
             except Exception:
                 pass
+
+        # Write offline status before shutting down (graceful stop)
+        if self.enabled and self.project_id:
+            if self.firestore_client:
+                try:
+                    self.firestore_client.collection("status").document("latest").update({
+                        "status": "offline",
+                        "timestamp": time.time(),
+                        "vscode_connected": False,
+                        "chrome_connected": False
+                    })
+                    print("[FirebaseSync] Graceful offline status pushed to Firestore.")
+                except Exception as e:
+                    print(f"[FirebaseSync] Failed to set offline status on stop: {e}")
+            else:
+                try:
+                    fields_to_update = ["status", "timestamp", "vscode_connected", "chrome_connected"]
+                    mask_query = "&".join([f"updateMask.fieldPaths={f}" for f in fields_to_update])
+                    url = (f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
+                           f"/databases/(default)/documents/status/latest?{mask_query}")
+                    payload = {"fields": {
+                        "status":             {"stringValue": "offline"},
+                        "timestamp":          {"doubleValue": time.time()},
+                        "vscode_connected":   {"booleanValue": False},
+                        "chrome_connected":   {"booleanValue": False}
+                    }}
+                    headers = {"Content-Type": "application/json"}
+                    token = self._get_bearer_token()
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+                    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                                 headers=headers, method="PATCH")
+                    with urllib.request.urlopen(req, timeout=5):
+                        pass
+                    print("[FirebaseSync] Graceful REST offline status pushed to Firestore.")
+                except Exception as e:
+                    print(f"[FirebaseSync] Failed to set REST offline status on stop: {e}")
 
     def _on_health_snapshot(self, doc_snapshot, changes, read_time):
         for doc in doc_snapshot:

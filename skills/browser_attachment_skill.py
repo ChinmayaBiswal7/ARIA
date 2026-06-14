@@ -155,6 +155,13 @@ class AriaBrowserAttachmentSkill:
 
     Both adapters go through the same permission/safety pipeline.
     """
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
 
     def __init__(
         self,
@@ -163,7 +170,11 @@ class AriaBrowserAttachmentSkill:
         cdp_url:        str   = DEFAULT_CDP_URL,
         use_mock:       bool  = False,
     ) -> None:
-        self.aria    = aria_instance
+        if aria_instance is not None:
+            self.aria = aria_instance
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
         self.db_path = db_path
         self.cdp_url = cdp_url
         # Force mock mode if Playwright isn't installed
@@ -347,7 +358,7 @@ class AriaBrowserAttachmentSkill:
                             continue
             finally:
                 # Detach only — never close the user's browser
-                browser.close()
+                browser.disconnect()
         return tabs
 
     # ── Private: Mock adapter ──────────────────────────────────────────────

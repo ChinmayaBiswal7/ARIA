@@ -283,14 +283,24 @@ class AriaVisionAgent(BaseAgent):
     def _continuous_loop(self):
         while self._running:
             try:
-                camera = None
                 aria = self.aria_inst
+                is_voice_active = False
+                if aria:
+                    if (getattr(aria, "voice", None) and (aria.voice.is_speaking or getattr(aria.voice, "vad_detecting_speech", False) or getattr(aria.voice, "recording_active", False))) or (hasattr(aria, "conversation_session") and aria.conversation_session.is_active()):
+                        is_voice_active = True
+                
+                if is_voice_active:
+                    time.sleep(2.0)
+                    continue
+
+                camera = None
                 if aria and getattr(aria, "camera", None):
                     camera = aria.camera
                 
                 frame = None
                 if camera and camera.available:
                     frame = camera.capture_frame_raw()
+
 
                 if frame is not None:
                     report = self._run_detection(frame, source="webcam")

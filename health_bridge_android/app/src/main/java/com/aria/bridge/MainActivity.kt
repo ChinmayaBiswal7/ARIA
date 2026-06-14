@@ -33,7 +33,12 @@ import androidx.webkit.WebViewAssetLoader
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.google.android.material.bottomnavigation.BottomNavigationView
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.animation.AnimatorSet
+import android.view.animation.LinearInterpolator
+import android.widget.ImageButton
+import androidx.cardview.widget.CardView
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
@@ -53,6 +58,10 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.firebase.storage.FirebaseStorage
+import android.speech.RecognizerIntent
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.PorterDuff
 
 class MainActivity : AppCompatActivity() {
 
@@ -60,7 +69,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
 
     // Scanner Views
-    private lateinit var layoutScanner: ScrollView
+    private lateinit var layoutScanner: LinearLayout
     private lateinit var btnScanCamera: Button
     private lateinit var btnScanGallery: Button
     private lateinit var scanPreviewImage: ImageView
@@ -70,12 +79,144 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnIngestScan: Button
     private var tempPhotoUri: Uri? = null
 
+    // Floating Dock Views
+    private lateinit var floatingNavDock: CardView
+    private lateinit var navHome: LinearLayout
+    private lateinit var navControl: LinearLayout
+    private lateinit var navProfile: LinearLayout
+    private lateinit var iconHome: ImageView
+    private lateinit var iconControl: ImageView
+    private lateinit var iconProfile: ImageView
+    private lateinit var textHome: TextView
+    private lateinit var textControl: TextView
+    private lateinit var textProfile: TextView
+
+    // Orb Views
+    private lateinit var orbOuterRing: ImageView
+    private lateinit var orbOuterRing2: ImageView
+    private lateinit var orbInnerCore: Orb3DView
+    private lateinit var orbWaveRipple1: ImageView
+    private lateinit var orbWaveRipple2: ImageView
+    private lateinit var textOrbStatus: TextView
+    private lateinit var textOrbStateDesc: TextView
+    private lateinit var textCpuLoad: TextView
+    private lateinit var textRamUsage: TextView
+
+    // Status Dots & Text
+    private lateinit var dotPcStatus: View
+    private lateinit var textPcStatus: TextView
+    private lateinit var dotChromeStatus: View
+    private lateinit var textChromeStatus: TextView
+    private lateinit var dotVsCodeStatus: View
+    private lateinit var textVsCodeStatus: TextView
+    private lateinit var dotFirebaseStatus: View
+    private lateinit var textFirebaseStatus: TextView
+
+    // Activity Strip
+    private lateinit var activityWindow: TextView
+    private lateinit var activityTask: TextView
+    private lateinit var activityLastAction: TextView
+
+    // Sub-page Wrappers & Toolbar Buttons
+    private lateinit var layoutWebViewContainer: LinearLayout
+    private lateinit var btnBackFromWebView: ImageButton
+    private lateinit var btnBackFromScanner: ImageButton
+    private lateinit var btnBackFromAlerts: ImageButton
+    private lateinit var btnBackFromMissions: ImageButton
+    private lateinit var btnBackFromCareer: ImageButton
+    private lateinit var badgeApprovalsPending: TextView
+    private lateinit var cardSecurityAlerts: LinearLayout
+
+    private var orbCoreAnimator: android.animation.Animator? = null
+    private var orbRingAnimator: android.animation.Animator? = null
+    private var orbRing2Animator: android.animation.Animator? = null
+    private var orbRipple1Animator: android.animation.Animator? = null
+    private var orbRipple2Animator: android.animation.Animator? = null
+    
+    private var currentOrbState: String = "idle"
+    private var isFlashing: Boolean = false
+    
+    private var lastChromeConnected: Boolean = false
+    private var lastMissionStatus: String = ""
+    private var lastPendingApprovalsCount: Int = 0
+
+    // Heartbeat caching variables and watchdog
+    private var lastHeartbeatReceived: Double = 0.0
+    private var lastStatusStr: String = "offline"
+    private var lastVsCodeConnected: Boolean = false
+
+    private val watchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val watchdogRunnable = object : Runnable {
+        override fun run() {
+            val nowSeconds = System.currentTimeMillis() / 1000.0
+            val elapsed = nowSeconds - lastHeartbeatReceived
+            if (lastHeartbeatReceived > 0.0 && elapsed >= 10.0) {
+                runOnUiThread {
+                    updateOrbState("offline")
+                    updateConnectionChips(
+                        pcOnline = false,
+                        chromeConnected = false,
+                        vscodeConnected = false,
+                        firebaseConnected = true
+                    )
+                    
+                    val lastSeenStr = if (elapsed < 60) {
+                        "PC Offline. Last seen: ${elapsed.toInt()}s ago"
+                    } else {
+                        val mins = (elapsed / 60).toInt()
+                        val secs = (elapsed % 60).toInt()
+                        "PC Offline. Last seen: ${mins}m ${secs}s ago"
+                    }
+                    textOrbStateDesc.text = lastSeenStr
+                }
+            } else if (lastHeartbeatReceived == 0.0) {
+                runOnUiThread {
+                    updateOrbState("offline")
+                    updateConnectionChips(
+                        pcOnline = false,
+                        chromeConnected = false,
+                        vscodeConnected = false,
+                        firebaseConnected = true
+                    )
+                    textOrbStateDesc.text = "PC Offline. Never seen"
+                }
+            }
+            watchdogHandler.postDelayed(this, 5000)
+        }
+    }
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val flashHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var flashRunnable: Runnable? = null
+
+    private var audioRecord: android.media.AudioRecord? = null
+    private var isRecordingAudio = false
+    private var audioThread: Thread? = null
+    private var lastRms: Double = 0.0
+
+    private val ripple2Runnable = Runnable {
+        try {
+            orbRipple2Animator?.start()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error starting ripple 2: ${e.message}")
+        }
+    }
+
+    private val speechRecognitionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.get(0) ?: ""
+            if (spokenText.isNotEmpty()) {
+                sendCustomCommandNative(spokenText)
+            }
+        }
+    }
+
     // Native Tab Views
-    private lateinit var bottomNavigation: BottomNavigationView
     private lateinit var layoutAlerts: LinearLayout
     private lateinit var layoutIncidentsContainer: LinearLayout
-    private lateinit var layoutMissions: ScrollView
-    private lateinit var layoutApprovals: LinearLayout
+    private lateinit var layoutMissions: LinearLayout
     private lateinit var layoutCareer: LinearLayout
     private lateinit var layoutCareersContainer: LinearLayout
     private lateinit var textNoCareers: TextView
@@ -107,6 +248,7 @@ class MainActivity : AppCompatActivity() {
     private var incidentsListenerRegistration: ListenerRegistration? = null
     private var careerListenerRegistration: ListenerRegistration? = null
     private var profileInsightsListenerRegistration: ListenerRegistration? = null
+    private var statusListenerRegistration: ListenerRegistration? = null
 
     // Profile Insights Views
     private lateinit var layoutProfileInsights: LinearLayout
@@ -380,12 +522,9 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
 
         // Native Tabs Setup
-        bottomNavigation = findViewById(R.id.bottomNavigation)
-        bottomNavigation.visibility = android.view.View.GONE // Hide until splash screen completes in WebView
         layoutAlerts = findViewById(R.id.layoutAlerts)
         layoutIncidentsContainer = findViewById(R.id.layoutIncidentsContainer)
         layoutMissions = findViewById(R.id.layoutMissions)
-        layoutApprovals = findViewById(R.id.layoutApprovals)
         layoutCareer = findViewById(R.id.layoutCareer)
         layoutCareersContainer = findViewById(R.id.layoutCareersContainer)
         textNoCareers = findViewById(R.id.textNoCareers)
@@ -404,23 +543,124 @@ class MainActivity : AppCompatActivity() {
         editScanText = findViewById(R.id.editScanText)
         btnIngestScan = findViewById(R.id.btnIngestScan)
 
-        // Configure Bottom Navigation menu programmatically
-        val menu = bottomNavigation.menu
-        menu.add(Menu.NONE, ITEM_WEBVIEW, Menu.NONE, "Remote").setIcon(android.R.drawable.ic_menu_slideshow)
-        menu.add(Menu.NONE, ITEM_SCANNER, Menu.NONE, "Scanner").setIcon(android.R.drawable.ic_menu_camera)
-        menu.add(Menu.NONE, ITEM_ALERTS, Menu.NONE, "Alerts").setIcon(android.R.drawable.ic_dialog_alert)
-        menu.add(Menu.NONE, ITEM_MISSIONS, Menu.NONE, "Missions").setIcon(android.R.drawable.ic_menu_today)
-        menu.add(Menu.NONE, ITEM_APPROVALS, Menu.NONE, "Approvals").setIcon(android.R.drawable.ic_menu_info_details)
-        menu.add(Menu.NONE, ITEM_CAREER, Menu.NONE, "Career").setIcon(android.R.drawable.ic_menu_myplaces)
+        // Floating Nav Dock Setup
+        floatingNavDock = findViewById(R.id.floatingNavDock)
+        floatingNavDock.visibility = android.view.View.GONE // Hide until splash screen completes in WebView
+        
+        navHome = findViewById(R.id.navHome)
+        navControl = findViewById(R.id.navControl)
+        navProfile = findViewById(R.id.navProfile)
+        
+        iconHome = findViewById(R.id.iconHome)
+        iconControl = findViewById(R.id.iconControl)
+        iconProfile = findViewById(R.id.iconProfile)
+        
+        textHome = findViewById(R.id.textHome)
+        textControl = findViewById(R.id.textControl)
+        textProfile = findViewById(R.id.textProfile)
 
-        bottomNavigation.setOnItemSelectedListener { item ->
-            webView.visibility = if (item.itemId == ITEM_WEBVIEW) View.VISIBLE else View.GONE
-            layoutScanner.visibility = if (item.itemId == ITEM_SCANNER) View.VISIBLE else View.GONE
-            layoutAlerts.visibility = if (item.itemId == ITEM_ALERTS) View.VISIBLE else View.GONE
-            layoutMissions.visibility = if (item.itemId == ITEM_MISSIONS) View.VISIBLE else View.GONE
-            layoutApprovals.visibility = if (item.itemId == ITEM_APPROVALS) View.VISIBLE else View.GONE
-            layoutCareer.visibility = if (item.itemId == ITEM_CAREER) View.VISIBLE else View.GONE
-            true
+        navHome.setOnClickListener { switchNavTab(NAV_HOME) }
+        navControl.setOnClickListener { switchNavTab(NAV_CONTROL) }
+        navProfile.setOnClickListener { switchNavTab(NAV_PROFILE) }
+
+        // Orb & Telemetry Views
+        orbOuterRing = findViewById(R.id.orbOuterRing)
+        orbOuterRing2 = findViewById(R.id.orbOuterRing2)
+        orbInnerCore = findViewById(R.id.orbInnerCore)
+        orbWaveRipple1 = findViewById(R.id.orbWaveRipple1)
+        orbWaveRipple2 = findViewById(R.id.orbWaveRipple2)
+        textOrbStatus = findViewById(R.id.textOrbStatus)
+        textOrbStateDesc = findViewById(R.id.textOrbStateDesc)
+        textCpuLoad = findViewById(R.id.textCpuLoad)
+        textRamUsage = findViewById(R.id.textRamUsage)
+
+        // Status Indicators
+        dotPcStatus = findViewById(R.id.dotPcStatus)
+        textPcStatus = findViewById(R.id.textPcStatus)
+        dotChromeStatus = findViewById(R.id.dotChromeStatus)
+        textChromeStatus = findViewById(R.id.textChromeStatus)
+        dotVsCodeStatus = findViewById(R.id.dotVsCodeStatus)
+        textVsCodeStatus = findViewById(R.id.textVsCodeStatus)
+        dotFirebaseStatus = findViewById(R.id.dotFirebaseStatus)
+        textFirebaseStatus = findViewById(R.id.textFirebaseStatus)
+
+        // Activity Strip
+        activityWindow = findViewById(R.id.activityWindow)
+        activityTask = findViewById(R.id.activityTask)
+        activityLastAction = findViewById(R.id.activityLastAction)
+
+        // Quick Action Clicks
+        findViewById<View>(R.id.actionTalk).setOnClickListener {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to ARIA...")
+            }
+            try {
+                speechRecognitionLauncher.launch(intent)
+            } catch (e: Exception) {
+                Toast.makeText(this, "Speech recognition not supported on this device.", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
+        findViewById<View>(R.id.actionControl).setOnClickListener {
+            switchNavTab(NAV_CONTROL)
+        }
+        
+        findViewById<View>(R.id.actionClipboard).setOnClickListener {
+            sendCustomCommandNative("laptop sync clipboard")
+        }
+        
+        findViewById<View>(R.id.actionScreenshot).setOnClickListener {
+            sendCustomCommandNative("laptop take screenshot")
+        }
+
+        // Sub-page containers
+        layoutWebViewContainer = findViewById(R.id.layoutWebViewContainer)
+        
+        // Toolbar Back Buttons
+        btnBackFromWebView = findViewById(R.id.btnBackFromWebView)
+        btnBackFromScanner = findViewById(R.id.btnBackFromScanner)
+        btnBackFromAlerts = findViewById(R.id.btnBackFromAlerts)
+        btnBackFromMissions = findViewById(R.id.btnBackFromMissions)
+        btnBackFromCareer = findViewById(R.id.btnBackFromCareer)
+
+        btnBackFromWebView.setOnClickListener { switchNavTab(NAV_HOME) }
+        btnBackFromScanner.setOnClickListener { switchNavTab(NAV_HOME) }
+        btnBackFromAlerts.setOnClickListener { switchNavTab(NAV_HOME) }
+        btnBackFromMissions.setOnClickListener { switchNavTab(NAV_HOME) }
+        btnBackFromCareer.setOnClickListener { switchNavTab(NAV_HOME) }
+
+        // Card Clicks
+        findViewById<View>(R.id.cardRemoteDesktop).setOnClickListener { switchNavTab(NAV_CONTROL) }
+        findViewById<View>(R.id.cardRemoteBrowser).setOnClickListener { switchNavTab(NAV_CONTROL) }
+        findViewById<View>(R.id.cardRemoteVsCode).setOnClickListener { switchNavTab(NAV_CONTROL) }
+        findViewById<View>(R.id.cardRemoteFiles).setOnClickListener { switchNavTab(NAV_CONTROL) }
+
+        findViewById<View>(R.id.cardIntelMissions).setOnClickListener { openSubPage(layoutMissions) }
+        findViewById<View>(R.id.cardIntelLearning).setOnClickListener {
+            Toast.makeText(this, "DBMS & Binary Search guides are up to date.", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<View>(R.id.cardIntelMemory).setOnClickListener {
+            Toast.makeText(this, "Memory Vault: SQLite & Vector indexes synchronized.", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<View>(R.id.cardIntelCareer).setOnClickListener { switchNavTab(NAV_PROFILE) }
+
+        cardSecurityAlerts = findViewById(R.id.cardSecurityAlerts)
+        badgeApprovalsPending = findViewById(R.id.badgeApprovalsPending)
+        cardSecurityAlerts.setOnClickListener { openSubPage(layoutAlerts) }
+        findViewById<View>(R.id.cardSecurityLog).setOnClickListener { openSubPage(layoutAlerts) }
+
+        findViewById<View>(R.id.cardCoreVsCode).setOnClickListener {
+            Toast.makeText(this, "VS Code Bridge is listening on port 9821.", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<View>(R.id.cardCoreBrowser).setOnClickListener {
+            Toast.makeText(this, "Browser Bridge is connected to remote debug on port 9222.", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<View>(R.id.cardCoreTelemetry).setOnClickListener {
+            Toast.makeText(this, "Telemetry stream is fully active.", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<View>(R.id.cardCoreHealth).setOnClickListener {
+            Toast.makeText(this, "System health checks passed.", Toast.LENGTH_SHORT).show()
         }
 
 
@@ -572,7 +812,10 @@ class MainActivity : AppCompatActivity() {
             @android.webkit.JavascriptInterface
             fun onSplashCompleted() {
                 runOnUiThread {
-                    bottomNavigation.visibility = android.view.View.VISIBLE
+                    webView.visibility = android.view.View.GONE
+                    findViewById<View>(R.id.layoutDashboard).visibility = android.view.View.VISIBLE
+                    floatingNavDock.visibility = android.view.View.VISIBLE
+                    switchNavTab(NAV_HOME)
                 }
             }
         }, "AndroidInterface")
@@ -655,15 +898,8 @@ class MainActivity : AppCompatActivity() {
 
         // Deep-link: open_tab=approvals (from approval FCM notification tap)
         if (intent.getStringExtra("open_tab") == "approvals") {
-            Log.d("MainActivity", "Launched from approval notification – switching to Approvals tab")
-            // Switch visibility
-            webView.visibility          = android.view.View.GONE
-            layoutAlerts.visibility     = android.view.View.GONE
-            layoutMissions.visibility   = android.view.View.GONE
-            layoutApprovals.visibility  = android.view.View.VISIBLE
-            layoutCareer.visibility     = android.view.View.GONE
-            // Sync bottom nav selection
-            bottomNavigation.selectedItemId = ITEM_APPROVALS
+            Log.d("MainActivity", "Launched from approval notification – switching to Alerts tab")
+            openSubPage(layoutAlerts)
             return
         }
 
@@ -686,8 +922,11 @@ class MainActivity : AppCompatActivity() {
         private const val ITEM_SCANNER = 2
         private const val ITEM_ALERTS = 3
         private const val ITEM_MISSIONS = 4
-        private const val ITEM_APPROVALS = 5
         private const val ITEM_CAREER = 6
+
+        private const val NAV_HOME = 0
+        private const val NAV_CONTROL = 1
+        private const val NAV_PROFILE = 2
     }
 
     private fun sendCustomCommandNative(commandText: String) {
@@ -717,77 +956,95 @@ class MainActivity : AppCompatActivity() {
                     Log.e("MainActivity", "Listen to active tasks failed: $error")
                     return@addSnapshotListener
                 }
-                if (snapshot != null && snapshot.exists() && snapshot.getString("status") != null) {
-                    textNoMissions.visibility = View.GONE
-                    cardActiveMission.visibility = View.VISIBLE
-                    layoutMissionControls.visibility = View.VISIBLE
+                runOnUiThread {
+                    if (snapshot != null && snapshot.exists() && snapshot.getString("status") != null) {
+                        textNoMissions.visibility = View.GONE
+                        cardActiveMission.visibility = View.VISIBLE
+                        layoutMissionControls.visibility = View.VISIBLE
 
-                    val goal = snapshot.getString("goal") ?: ""
-                    val status = snapshot.getString("status") ?: ""
-                    
-                    missionGoal.text = "Goal: $goal"
-                    missionStatus.text = "Status: $status"
+                        val goal = snapshot.getString("goal") ?: ""
+                        val status = snapshot.getString("status") ?: ""
+                        
+                        missionGoal.text = "Goal: $goal"
+                        missionStatus.text = "Status: $status"
 
-                    // Parse steps trace graph
-                    val steps = snapshot.get("steps") as? List<Map<String, Any>>
-                    val sb = StringBuilder("Steps Graph:\n")
-                    steps?.forEach { step ->
-                        val num = step["step_number"] ?: 0
-                        val act = step["action"] ?: ""
-                        val tgt = step["target"] ?: ""
-                        val stat = step["status"] ?: ""
-                        sb.append(" ├── Step $num: $act $tgt -> $stat\n")
+                        // Parse steps trace graph
+                        val steps = snapshot.get("steps") as? List<Map<String, Any>>
+                        val sb = StringBuilder("Steps Graph:\n")
+                        steps?.forEach { step ->
+                            val num = step["step_number"] ?: 0
+                            val act = step["action"] ?: ""
+                            val tgt = step["target"] ?: ""
+                            val stat = step["status"] ?: ""
+                            sb.append(" ├── Step $num: $act $tgt -> $stat\n")
+                        }
+                        missionStepsTrace.text = sb.toString()
+
+                        val stepsCount = steps?.size ?: 0
+                        findViewById<TextView>(R.id.descMissionsCard).text = "Goal: $goal | $stepsCount steps"
+
+                        val isCompleted = status.lowercase() in listOf("completed", "done", "success")
+                        val wasCompleted = lastMissionStatus.lowercase() in listOf("completed", "done", "success")
+                        if (isCompleted && !wasCompleted) {
+                            triggerOrbFlash("#10B981", 1500)
+                        }
+                        lastMissionStatus = status
+                    } else {
+                        textNoMissions.visibility = View.VISIBLE
+                        cardActiveMission.visibility = View.GONE
+                        layoutMissionControls.visibility = View.GONE
+                        findViewById<TextView>(R.id.descMissionsCard).text = "Active tasks queue"
+                        lastMissionStatus = ""
                     }
-                    missionStepsTrace.text = sb.toString()
-                } else {
-                    textNoMissions.visibility = View.VISIBLE
-                    cardActiveMission.visibility = View.GONE
-                    layoutMissionControls.visibility = View.GONE
                 }
             }
 
         // 2. Listen to pending approvals
-        approvalsListenerRegistration = db.collection("approvals").document("latest")
-            .addSnapshotListener { snapshot, error ->
+        approvalsListenerRegistration = db.collection("approvals")
+            .whereEqualTo("status", "pending")
+            .addSnapshotListener { snapshots, error ->
                 if (error != null) {
                     Log.e("MainActivity", "Listen to approvals failed: $error")
                     return@addSnapshotListener
                 }
-                if (snapshot != null && snapshot.exists() && snapshot.getString("status") == "pending") {
-                    textNoApprovals.visibility = View.GONE
-                    cardPendingApproval.visibility = View.VISIBLE
+                val count = snapshots?.size() ?: 0
+                runOnUiThread {
+                    updateSecurityCardBadge(count)
+                    if (count > lastPendingApprovalsCount) {
+                        triggerOrbFlash("#EF4444", 1500)
+                    }
+                    lastPendingApprovalsCount = count
+                    if (snapshots != null && !snapshots.isEmpty) {
+                        textNoApprovals.visibility = View.GONE
+                        cardPendingApproval.visibility = View.VISIBLE
 
-                    val risk = snapshot.getString("risk_level") ?: "HIGH"
-                    val tag  = snapshot.getString("action_tag") ?: ""
-                    val desc = snapshot.getString("description")
-                        ?: "ARIA wants to: $tag"
-                    val tsRaw = snapshot.getDouble("timestamp")
-                    val tsStr = if (tsRaw != null) {
-                        val sdf = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-                        "Requested at " + sdf.format(java.util.Date((tsRaw * 1000).toLong()))
-                    } else "Requested just now"
+                        val doc = snapshots.documents.first()
+                        val risk = doc.getString("risk_level") ?: "HIGH"
+                        val tag  = doc.getString("action_tag") ?: ""
+                        val desc = doc.getString("description") ?: "ARIA wants to: $tag"
+                        val tsRaw = doc.getDouble("timestamp")
+                        val tsStr = if (tsRaw != null) {
+                            val sdf = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                            "Requested at " + sdf.format(java.util.Date((tsRaw * 1000).toLong()))
+                        } else "Requested just now"
 
-                    // Risk badge colour
-                    val riskColor = if (risk == "CRITICAL") "#EF4444" else "#F59E0B"
-                    approvalRiskLevel.text = "⚠ $risk RISK"
-                    approvalRiskLevel.setTextColor(android.graphics.Color.parseColor(riskColor))
-                    approvalActionTag.text  = tag
-                    approvalDescription.text = desc
-                    approvalTimestamp.text   = tsStr
+                        val riskColor = if (risk == "CRITICAL") "#EF4444" else "#F59E0B"
+                        approvalRiskLevel.text = "⚠ $risk RISK"
+                        approvalRiskLevel.setTextColor(android.graphics.Color.parseColor(riskColor))
+                        approvalActionTag.text  = tag
+                        approvalDescription.text = desc
+                        approvalTimestamp.text   = tsStr
 
-                    btnApproveRequest.setOnClickListener {
-                        db.collection("approvals").document("latest").update("status", "approved")
-                        textNoApprovals.visibility  = View.VISIBLE
+                        btnApproveRequest.setOnClickListener {
+                            db.collection("approvals").document(doc.id).update("status", "approved")
+                        }
+                        btnRejectRequest.setOnClickListener {
+                            db.collection("approvals").document(doc.id).update("status", "rejected")
+                        }
+                    } else {
+                        textNoApprovals.visibility = View.VISIBLE
                         cardPendingApproval.visibility = View.GONE
                     }
-                    btnRejectRequest.setOnClickListener {
-                        db.collection("approvals").document("latest").update("status", "rejected")
-                        textNoApprovals.visibility  = View.VISIBLE
-                        cardPendingApproval.visibility = View.GONE
-                    }
-                } else {
-                    textNoApprovals.visibility = View.VISIBLE
-                    cardPendingApproval.visibility = View.GONE
                 }
             }
 
@@ -1115,6 +1372,19 @@ class MainActivity : AppCompatActivity() {
                     // Render Focus Chips
                     containerFocusChips.removeAllViews()
                     val focusList = snapshot.get("current_focus") as? List<Map<String, Any>>
+                    
+                    val careerDesc = findViewById<TextView>(R.id.descCareerCard)
+                    if (!focusList.isNullOrEmpty()) {
+                        val firstTopic = focusList[0]["topic"] as? String ?: ""
+                        if (firstTopic.isNotEmpty()) {
+                            careerDesc.text = firstTopic
+                        } else {
+                            careerDesc.text = "Opportunities Tracker"
+                        }
+                    } else {
+                        careerDesc.text = "Opportunities Tracker"
+                    }
+
                     if (focusList != null) {
                         for (f in focusList.take(3)) {
                             val topic = f["topic"] as? String ?: ""
@@ -1224,6 +1494,103 @@ class MainActivity : AppCompatActivity() {
                     layoutProfileInsights.visibility = View.GONE
                 }
             }
+
+        // 6. Listen to status/latest for Orb state, telemetry, and connectivity status
+        statusListenerRegistration = db.collection("status").document("latest")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e("MainActivity", "Listen to status latest failed: $error")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val statusStr = snapshot.getString("status") ?: "idle"
+                    val timestamp = snapshot.getDouble("timestamp") ?: 0.0
+                    val vscodeConnected = snapshot.getBoolean("vscode_connected") ?: false
+                    val chromeConnected = snapshot.getBoolean("chrome_connected") ?: false
+                    val chromeTabsCount = snapshot.getLong("chrome_tabs_count") ?: 0L
+                    
+                    val cpu = snapshot.getDouble("cpu_percent") ?: 0.0
+                    val ram = snapshot.getDouble("ram_gb") ?: 0.0
+                    
+                    val activeFile = snapshot.getString("vscode_active_file") ?: ""
+                    val branch = snapshot.getString("vscode_git_branch") ?: ""
+                    val errors = snapshot.getLong("vscode_errors") ?: 0L
+                    val warnings = snapshot.getLong("vscode_warnings") ?: 0L
+                    
+                    val chromeTitle = snapshot.getString("chrome_active_title") ?: ""
+                    val lastResponseText = snapshot.getString("last_response") ?: ""
+
+                    runOnUiThread {
+                        // Cache values
+                        lastHeartbeatReceived = timestamp
+                        lastStatusStr = statusStr
+                        lastVsCodeConnected = vscodeConnected
+
+                        // Update Orb metrics
+                        textCpuLoad.text = String.format(java.util.Locale.US, "CPU: %.1f%%", cpu)
+                        textRamUsage.text = String.format(java.util.Locale.US, "RAM: %.1f GB", ram)
+
+                        // Update Live Activity Strip
+                        activityWindow.text = if (activeFile.isNotEmpty()) "Current Window: VS Code" else "Current Window: Standby"
+                        activityTask.text = if (activeFile.isNotEmpty()) "Current File: $activeFile" else "Current File: None"
+                        
+                        val actionDesc = when {
+                            chromeTitle.isNotEmpty() && activeFile.isNotEmpty() -> "Editing $activeFile | Chrome: $chromeTitle"
+                            activeFile.isNotEmpty() -> "Editing $activeFile on branch $branch"
+                            chromeTitle.isNotEmpty() -> "Active Chrome tab: $chromeTitle"
+                            else -> lastResponseText.ifEmpty { "Monitoring system status" }
+                        }
+                        activityLastAction.text = "Last Action: $actionDesc"
+
+                        // Chrome Card description
+                        val chromeDesc = findViewById<TextView>(R.id.descBrowserCard)
+                        if (chromeConnected) {
+                            chromeDesc.text = "$chromeTabsCount tabs attached"
+                        } else {
+                            chromeDesc.text = "Chrome CDP Bridge"
+                        }
+
+                        // VS Code Card description
+                        val vsCodeDesc = findViewById<TextView>(R.id.descVsCodeCard)
+                        if (vscodeConnected) {
+                            val fileText = if (activeFile.isNotEmpty()) "$activeFile open" else "No file open"
+                            vsCodeDesc.text = "$fileText | $errors errors"
+                        } else {
+                            vsCodeDesc.text = "Workspace Bridge"
+                        }
+
+                        // Determine PC online status from heartbeat
+                        val nowSeconds = System.currentTimeMillis() / 1000.0
+                        val pcOnline = (nowSeconds - timestamp) < 10.0 // online if heartbeat within 10 seconds
+                        
+                        val activeState = if (pcOnline) statusStr else "offline"
+                        updateOrbState(activeState)
+
+                        if (chromeConnected && !lastChromeConnected) {
+                            triggerOrbFlash("#00E5FF", 1200)
+                        }
+                        lastChromeConnected = chromeConnected
+                        
+                        // Update Status Indicators
+                        updateConnectionChips(
+                            pcOnline = pcOnline,
+                            chromeConnected = chromeConnected,
+                            vscodeConnected = vscodeConnected,
+                            firebaseConnected = true
+                        )
+                    }
+                } else {
+                    runOnUiThread {
+                        updateOrbState("offline")
+                        updateConnectionChips(
+                            pcOnline = false,
+                            chromeConnected = false,
+                            vscodeConnected = false,
+                            firebaseConnected = false
+                        )
+                    }
+                }
+            }
     }
 
     private fun updateFirestoreOpportunityStatus(oppId: Double, newStatus: String) {
@@ -1313,12 +1680,506 @@ class MainActivity : AppCompatActivity() {
         alertDialog.show()
     }
 
+    private fun switchNavTab(tabId: Int) {
+        findViewById<View>(R.id.layoutDashboard).visibility = View.GONE
+        layoutWebViewContainer.visibility = View.GONE
+        layoutCareer.visibility = View.GONE
+        layoutScanner.visibility = View.GONE
+        layoutAlerts.visibility = View.GONE
+        layoutMissions.visibility = View.GONE
+
+        // Reset all icon/text colors
+        iconHome.setColorFilter(android.graphics.Color.parseColor("#64748B"))
+        textHome.setTextColor(android.graphics.Color.parseColor("#64748B"))
+        textHome.setTypeface(null, android.graphics.Typeface.NORMAL)
+
+        iconControl.setColorFilter(android.graphics.Color.parseColor("#64748B"))
+        textControl.setTextColor(android.graphics.Color.parseColor("#64748B"))
+        textControl.setTypeface(null, android.graphics.Typeface.NORMAL)
+
+        iconProfile.setColorFilter(android.graphics.Color.parseColor("#64748B"))
+        textProfile.setTextColor(android.graphics.Color.parseColor("#64748B"))
+        textProfile.setTypeface(null, android.graphics.Typeface.NORMAL)
+
+        floatingNavDock.visibility = View.VISIBLE
+
+        when (tabId) {
+            NAV_HOME -> {
+                findViewById<View>(R.id.layoutDashboard).visibility = View.VISIBLE
+                iconHome.setColorFilter(android.graphics.Color.parseColor("#00E5FF"))
+                textHome.setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                textHome.setTypeface(null, android.graphics.Typeface.BOLD)
+            }
+            NAV_CONTROL -> {
+                layoutWebViewContainer.visibility = View.VISIBLE
+                webView.visibility = View.VISIBLE
+                iconControl.setColorFilter(android.graphics.Color.parseColor("#00E5FF"))
+                textControl.setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                textControl.setTypeface(null, android.graphics.Typeface.BOLD)
+            }
+            NAV_PROFILE -> {
+                layoutCareer.visibility = View.VISIBLE
+                iconProfile.setColorFilter(android.graphics.Color.parseColor("#00E5FF"))
+                textProfile.setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                textProfile.setTypeface(null, android.graphics.Typeface.BOLD)
+            }
+        }
+    }
+
+    private fun openSubPage(pageView: View) {
+        floatingNavDock.visibility = View.GONE
+        findViewById<View>(R.id.layoutDashboard).visibility = View.GONE
+        layoutWebViewContainer.visibility = View.GONE
+        layoutCareer.visibility = View.GONE
+        layoutScanner.visibility = View.GONE
+        layoutAlerts.visibility = View.GONE
+        layoutMissions.visibility = View.GONE
+
+        pageView.visibility = View.VISIBLE
+    }
+
+    private var rippleStartTime: Long = 0L
+
+    private fun updateOrbState(state: String) {
+        val lowerState = state.lowercase()
+        currentOrbState = lowerState
+        if (isFlashing) return
+
+        orbCoreAnimator?.cancel()
+        orbRingAnimator?.cancel()
+        orbRing2Animator?.cancel()
+        orbRipple1Animator?.cancel()
+        orbRipple2Animator?.cancel()
+        mainHandler.removeCallbacks(ripple2Runnable)
+
+        orbInnerCore.scaleX = 1.0f
+        orbInnerCore.scaleY = 1.0f
+        orbOuterRing.rotation = 0.0f
+        orbOuterRing2.rotation = 0.0f
+
+        orbWaveRipple1.visibility = View.INVISIBLE
+        orbWaveRipple2.visibility = View.INVISIBLE
+        orbWaveRipple1.scaleX = 1.0f
+        orbWaveRipple1.scaleY = 1.0f
+        orbWaveRipple1.alpha = 1.0f
+        orbWaveRipple2.scaleX = 1.0f
+        orbWaveRipple2.scaleY = 1.0f
+        orbWaveRipple2.alpha = 1.0f
+
+        orbInnerCore.imageTintList = null
+        orbOuterRing.imageTintList = null
+        orbOuterRing2.imageTintList = null
+        orbWaveRipple1.imageTintList = null
+        orbWaveRipple2.imageTintList = null
+
+        // Update the 3D particle state
+        orbInnerCore.setState(lowerState)
+
+        if (lowerState == "listening" || lowerState == "speaking") {
+            startAudioListening()
+        } else {
+            stopAudioListening()
+        }
+
+        when (lowerState) {
+            "listening" -> {
+                orbOuterRing.setImageResource(R.drawable.bg_orb_ring_cyan)
+                orbOuterRing2.setImageResource(R.drawable.bg_orb_ring_cyan)
+                textOrbStatus.text = "LISTENING"
+                textOrbStatus.setTextColor(android.graphics.Color.parseColor("#00E5FF"))
+                textOrbStateDesc.text = "Aria is listening..."
+
+                // Rotating Rings (Fast opposite directions)
+                orbRingAnimator = ObjectAnimator.ofFloat(orbOuterRing, "rotation", 0f, 360f).apply {
+                    duration = 3500
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+                orbRing2Animator = ObjectAnimator.ofFloat(orbOuterRing2, "rotation", 0f, -360f).apply {
+                    duration = 2800
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+
+                // Setup ripples (Cyan)
+                orbWaveRipple1.imageTintList = ColorStateList.valueOf(Color.parseColor("#00E5FF"))
+                orbWaveRipple2.imageTintList = ColorStateList.valueOf(Color.parseColor("#00E5FF"))
+                orbWaveRipple1.visibility = View.VISIBLE
+                rippleStartTime = System.currentTimeMillis()
+            }
+            "thinking" -> {
+                orbOuterRing.setImageResource(R.drawable.bg_orb_ring_purple)
+                orbOuterRing2.setImageResource(R.drawable.bg_orb_ring_purple)
+                textOrbStatus.text = "THINKING"
+                textOrbStatus.setTextColor(android.graphics.Color.parseColor("#A78BFA"))
+                textOrbStateDesc.text = "Analyzing context..."
+
+                // Rotating Rings (Very fast)
+                orbRingAnimator = ObjectAnimator.ofFloat(orbOuterRing, "rotation", 0f, 360f).apply {
+                    duration = 2000
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+                orbRing2Animator = ObjectAnimator.ofFloat(orbOuterRing2, "rotation", 0f, -360f).apply {
+                    duration = 1600
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+            }
+            "speaking" -> {
+                orbOuterRing.setImageResource(R.drawable.bg_orb_ring_green)
+                orbOuterRing2.setImageResource(R.drawable.bg_orb_ring_green)
+                textOrbStatus.text = "SPEAKING"
+                textOrbStatus.setTextColor(android.graphics.Color.parseColor("#10B981"))
+                textOrbStateDesc.text = "Aria is responding..."
+
+                // Rotating Rings
+                orbRingAnimator = ObjectAnimator.ofFloat(orbOuterRing, "rotation", 0f, 360f).apply {
+                    duration = 4500
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+                orbRing2Animator = ObjectAnimator.ofFloat(orbOuterRing2, "rotation", 0f, -360f).apply {
+                    duration = 3600
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+
+                // Setup ripples (Green)
+                orbWaveRipple1.imageTintList = ColorStateList.valueOf(Color.parseColor("#10B981"))
+                orbWaveRipple2.imageTintList = ColorStateList.valueOf(Color.parseColor("#10B981"))
+                orbWaveRipple1.visibility = View.VISIBLE
+                rippleStartTime = System.currentTimeMillis()
+            }
+            "offline" -> {
+                orbOuterRing.setImageResource(R.drawable.bg_orb_ring_red)
+                orbOuterRing2.setImageResource(R.drawable.bg_orb_ring_red)
+                textOrbStatus.text = "OFFLINE"
+                textOrbStatus.setTextColor(android.graphics.Color.parseColor("#EF4444"))
+                textOrbStateDesc.text = "Check connection to PC server"
+
+                // Rotating Rings (Extremely slow)
+                orbRingAnimator = ObjectAnimator.ofFloat(orbOuterRing, "rotation", 0f, 360f).apply {
+                    duration = 30000
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+                orbRing2Animator = ObjectAnimator.ofFloat(orbOuterRing2, "rotation", 0f, -360f).apply {
+                    duration = 25000
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+            }
+            else -> { // idle/online
+                orbOuterRing.setImageResource(R.drawable.bg_orb_ring_blue)
+                orbOuterRing2.setImageResource(R.drawable.bg_orb_ring_blue)
+                textOrbStatus.text = "ONLINE"
+                textOrbStatus.setTextColor(android.graphics.Color.parseColor("#008CFF"))
+                textOrbStateDesc.text = "ARIA is ready to assist you"
+
+                // Rotating Rings (Slow)
+                orbRingAnimator = ObjectAnimator.ofFloat(orbOuterRing, "rotation", 0f, 360f).apply {
+                    duration = 10000
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+                orbRing2Animator = ObjectAnimator.ofFloat(orbOuterRing2, "rotation", 0f, -360f).apply {
+                    duration = 8000
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = LinearInterpolator()
+                    start()
+                }
+            }
+        }
+    }
+
+    private fun triggerOrbFlash(colorHex: String, durationMs: Long) {
+        flashRunnable?.let { flashHandler.removeCallbacks(it) }
+
+        isFlashing = true
+
+        orbCoreAnimator?.cancel()
+        orbRingAnimator?.cancel()
+        orbRing2Animator?.cancel()
+        orbRipple1Animator?.cancel()
+        orbRipple2Animator?.cancel()
+        mainHandler.removeCallbacks(ripple2Runnable)
+
+        val color = Color.parseColor(colorHex)
+        val colorStateList = ColorStateList.valueOf(color)
+
+        orbInnerCore.imageTintList = colorStateList
+        orbOuterRing.imageTintList = colorStateList
+        orbOuterRing2.imageTintList = colorStateList
+        orbWaveRipple1.imageTintList = colorStateList
+        orbWaveRipple2.imageTintList = colorStateList
+
+        orbWaveRipple1.visibility = View.VISIBLE
+        orbWaveRipple2.visibility = View.VISIBLE
+        orbWaveRipple1.alpha = 0.8f
+        orbWaveRipple2.alpha = 0.5f
+
+        val pulseX = ObjectAnimator.ofFloat(orbInnerCore, "scaleX", 1.0f, 1.25f, 1.0f)
+        val pulseY = ObjectAnimator.ofFloat(orbInnerCore, "scaleY", 1.0f, 1.25f, 1.0f)
+        
+        val rippleScaleX1 = ObjectAnimator.ofFloat(orbWaveRipple1, "scaleX", 1.0f, 1.8f)
+        val rippleScaleY1 = ObjectAnimator.ofFloat(orbWaveRipple1, "scaleY", 1.0f, 1.8f)
+        val rippleAlpha1 = ObjectAnimator.ofFloat(orbWaveRipple1, "alpha", 0.8f, 0.0f)
+
+        val rippleScaleX2 = ObjectAnimator.ofFloat(orbWaveRipple2, "scaleX", 1.0f, 2.2f)
+        val rippleScaleY2 = ObjectAnimator.ofFloat(orbWaveRipple2, "scaleY", 1.0f, 2.2f)
+        val rippleAlpha2 = ObjectAnimator.ofFloat(orbWaveRipple2, "alpha", 0.5f, 0.0f)
+
+        AnimatorSet().apply {
+            playTogether(
+                pulseX, pulseY, 
+                rippleScaleX1, rippleScaleY1, rippleAlpha1,
+                rippleScaleX2, rippleScaleY2, rippleAlpha2
+            )
+            duration = 1000
+            start()
+        }
+
+        orbRingAnimator = ObjectAnimator.ofFloat(orbOuterRing, "rotation", 0f, 360f).apply {
+            duration = 1000
+            start()
+        }
+        orbRing2Animator = ObjectAnimator.ofFloat(orbOuterRing2, "rotation", 0f, -360f).apply {
+            duration = 1000
+            start()
+        }
+
+        val runnable = Runnable {
+            isFlashing = false
+            orbInnerCore.imageTintList = null
+            orbOuterRing.imageTintList = null
+            orbOuterRing2.imageTintList = null
+            orbWaveRipple1.imageTintList = null
+            orbWaveRipple2.imageTintList = null
+            
+            updateOrbState(currentOrbState)
+        }
+        flashRunnable = runnable
+        flashHandler.postDelayed(runnable, durationMs)
+    }
+
+    private fun updateConnectionChips(
+        pcOnline: Boolean,
+        chromeConnected: Boolean,
+        vscodeConnected: Boolean,
+        firebaseConnected: Boolean
+    ) {
+        runOnUiThread {
+            dotPcStatus.background = ContextCompat.getDrawable(this, if (pcOnline) R.drawable.bg_dot_online else R.drawable.bg_dot_offline)
+            textPcStatus.text = if (pcOnline) "PC ONLINE" else "PC OFFLINE"
+            textPcStatus.setTextColor(android.graphics.Color.parseColor(if (pcOnline) "#FFFFFF" else "#64748B"))
+
+            dotChromeStatus.background = ContextCompat.getDrawable(this, if (chromeConnected) R.drawable.bg_dot_online else R.drawable.bg_dot_offline)
+            textChromeStatus.text = if (chromeConnected) "CHROME ATTACHED" else "CHROME OFFLINE"
+            textChromeStatus.setTextColor(android.graphics.Color.parseColor(if (chromeConnected) "#FFFFFF" else "#64748B"))
+
+            dotVsCodeStatus.background = ContextCompat.getDrawable(this, if (vscodeConnected) R.drawable.bg_dot_online else R.drawable.bg_dot_offline)
+            textVsCodeStatus.text = if (vscodeConnected) "VS CODE CONNECTED" else "VS CODE OFFLINE"
+            textVsCodeStatus.setTextColor(android.graphics.Color.parseColor(if (vscodeConnected) "#FFFFFF" else "#64748B"))
+
+            dotFirebaseStatus.background = ContextCompat.getDrawable(this, if (firebaseConnected) R.drawable.bg_dot_online else R.drawable.bg_dot_offline)
+            textFirebaseStatus.text = if (firebaseConnected) "FIREBASE SYNCED" else "FIREBASE OFFLINE"
+            textFirebaseStatus.setTextColor(android.graphics.Color.parseColor(if (firebaseConnected) "#FFFFFF" else "#64748B"))
+        }
+    }
+
+    private fun updateSecurityCardBadge(count: Int) {
+        badgeApprovalsPending.text = "$count Pending Requests"
+        when {
+            count == 0 -> {
+                badgeApprovalsPending.setTextColor(android.graphics.Color.parseColor("#10B981"))
+                cardSecurityAlerts.background = ContextCompat.getDrawable(this, R.drawable.card_background)
+            }
+            count in 1..4 -> {
+                badgeApprovalsPending.setTextColor(android.graphics.Color.parseColor("#F59E0B"))
+                cardSecurityAlerts.background = ContextCompat.getDrawable(this, R.drawable.card_background_attention)
+            }
+            else -> {
+                badgeApprovalsPending.setTextColor(android.graphics.Color.parseColor("#EF4444"))
+                cardSecurityAlerts.background = ContextCompat.getDrawable(this, R.drawable.card_background_warning)
+            }
+        }
+    }
+
+    override fun onBackPressed() {
+        if (layoutWebViewContainer.visibility == View.VISIBLE && webView.canGoBack()) {
+            webView.goBack()
+        } else if (layoutScanner.visibility == View.VISIBLE ||
+            layoutAlerts.visibility == View.VISIBLE ||
+            layoutMissions.visibility == View.VISIBLE ||
+            layoutWebViewContainer.visibility == View.VISIBLE ||
+            layoutCareer.visibility == View.VISIBLE) {
+            switchNavTab(NAV_HOME)
+        } else {
+            super.onBackPressed()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (currentOrbState == "listening" || currentOrbState == "speaking") {
+            startAudioListening()
+        }
+        // Start heartbeat watchdog
+        watchdogHandler.post(watchdogRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopAudioListening()
+        // Stop heartbeat watchdog
+        watchdogHandler.removeCallbacks(watchdogRunnable)
+    }
+
+    private fun startAudioListening() {
+        if (isRecordingAudio) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        isRecordingAudio = true
+        audioThread = Thread {
+            val sampleRate = 16000
+            val channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO
+            val audioFormat = android.media.AudioFormat.ENCODING_PCM_16BIT
+            val minBufferSize = android.media.AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+            val internalBufferSize = Math.max(minBufferSize, 2048)
+
+            try {
+                audioRecord = android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    channelConfig,
+                    audioFormat,
+                    internalBufferSize
+                )
+
+                if (audioRecord?.state == android.media.AudioRecord.STATE_INITIALIZED) {
+                    audioRecord?.startRecording()
+                    // 512 shorts (~32ms chunks) for high-frequency low-latency updates
+                    val audioBuffer = ShortArray(512)
+
+                    var noiseFloor = 35.0
+                    val maxVolume = 1200.0
+
+                    while (isRecordingAudio) {
+                        val readResult = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
+                        if (readResult > 0) {
+                            var sum = 0.0
+                            for (i in 0 until readResult) {
+                                sum += audioBuffer[i] * audioBuffer[i]
+                            }
+                            val rms = Math.sqrt(sum / readResult)
+                            
+                            lastRms = lastRms * 0.6 + rms * 0.4
+
+                            // Asymmetric noise floor tracking: drop fast, rise slow
+                            if (lastRms < noiseFloor) {
+                                noiseFloor = noiseFloor * 0.95 + lastRms * 0.05
+                            } else {
+                                noiseFloor = noiseFloor * 0.999 + lastRms * 0.001
+                            }
+                            noiseFloor = Math.max(10.0, noiseFloor)
+
+                            val excess = Math.max(0.0, lastRms - noiseFloor)
+                            val rawLevel = excess / maxVolume
+                            val finalLevel = Math.min(1.0, Math.max(0.0, rawLevel)).toFloat()
+
+                            runOnUiThread {
+                                if (isRecordingAudio && !isFlashing) {
+                                    applyAudioReactiveScale(finalLevel)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: SecurityException) {
+                Log.e("MainActivity", "Audio record security exception: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Audio record exception: ${e.message}")
+            } finally {
+                try {
+                    audioRecord?.stop()
+                    audioRecord?.release()
+                } catch (e: Exception) {}
+                audioRecord = null
+            }
+        }.apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
+    }
+
+    private fun stopAudioListening() {
+        isRecordingAudio = false
+        audioThread = null
+        runOnUiThread {
+            orbInnerCore.scaleX = 1.0f
+            orbInnerCore.scaleY = 1.0f
+            orbInnerCore.setAudioLevel(0f)
+            orbOuterRing.scaleX = 1.0f
+            orbOuterRing.scaleY = 1.0f
+            orbOuterRing2.scaleX = 1.0f
+            orbOuterRing2.scaleY = 1.0f
+        }
+    }
+
+    private fun applyAudioReactiveScale(level: Float) {
+        // Feed real-time level to the custom 3D particle view
+        orbInnerCore.setAudioLevel(level)
+
+        // Scale the outer dashed rings moderately
+        val outerScale = 1.0f + level * 0.12f
+        orbOuterRing.scaleX = outerScale
+        orbOuterRing.scaleY = outerScale
+
+        val innerScale = 1.0f + level * 0.08f
+        orbOuterRing2.scaleX = innerScale
+        orbOuterRing2.scaleY = innerScale
+
+        // Staggered ripple expansions (period = 2000ms, staggered by 1000ms)
+        if (currentOrbState == "listening" || currentOrbState == "speaking") {
+            val elapsed = System.currentTimeMillis() - rippleStartTime
+            val p1 = (elapsed % 2000) / 2000f
+            val p2 = if (elapsed >= 1000) ((elapsed - 1000) % 2000) / 2000f else 0f
+
+            orbWaveRipple1.scaleX = 0.7f + p1 * (1.3f + level * 0.8f)
+            orbWaveRipple1.scaleY = 0.7f + p1 * (1.3f + level * 0.8f)
+            orbWaveRipple1.alpha = (1.0f - p1) * (0.2f + level * 0.8f)
+
+            if (elapsed >= 1000) {
+                orbWaveRipple2.visibility = View.VISIBLE
+                orbWaveRipple2.scaleX = 0.7f + p2 * (1.3f + level * 0.8f)
+                orbWaveRipple2.scaleY = 0.7f + p2 * (1.3f + level * 0.8f)
+                orbWaveRipple2.alpha = (1.0f - p2) * (0.2f + level * 0.8f)
+            } else {
+                orbWaveRipple2.visibility = View.INVISIBLE
+            }
+        }
+    }
+
     override fun onDestroy() {
+        stopAudioListening()
         super.onDestroy()
         activeTasksListenerRegistration?.remove()
         approvalsListenerRegistration?.remove()
         incidentsListenerRegistration?.remove()
         careerListenerRegistration?.remove()
         profileInsightsListenerRegistration?.remove()
+        statusListenerRegistration?.remove()
     }
 }

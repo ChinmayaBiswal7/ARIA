@@ -7,80 +7,1485 @@
     android:background="#05060F"
     tools:context=".MainActivity">
 
-    <!-- ── Tab 1: WebView Layer (Secondary) ── -->
-    <WebView
-        android:id="@+id/webView"
+    <!-- ========================================== -->
+    <!-- ── Screen: Main Dashboard (Default) ── -->
+    <!-- ========================================== -->
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/layoutDashboard"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_above="@id/bottomNavigation"
-        android:visibility="visible" />
-
-
-
-    <!-- ── Tab 3: Security Inbox ── -->
-    <LinearLayout
-        android:id="@+id/layoutAlerts"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_above="@id/bottomNavigation"
-        android:orientation="vertical"
-        android:padding="16dp"
-        android:visibility="gone">
-
-        <Button
-            android:id="@+id/btnLiveCheckin"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:backgroundTint="#00E5FF"
-            android:text="🎥 Request Live Check-in"
-            android:textColor="#05060F"
-            android:textStyle="bold"
-            android:layout_marginBottom="20dp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Security Incident History"
-            android:textColor="#64748B"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
-
-        <ScrollView
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:fillViewport="true">
-
-            <LinearLayout
-                android:id="@+id/layoutIncidentsContainer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
-
-        </ScrollView>
-
-    </LinearLayout>
-
-    <!-- ── Tab 4: Missions Monitor ── -->
-    <ScrollView
-        android:id="@+id/layoutMissions"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_above="@id/bottomNavigation"
         android:fillViewport="true"
-        android:visibility="gone">
+        android:visibility="visible">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- ========================================== -->
+            <!-- ── FOLD 1: Hero Landing Viewport ── -->
+            <!-- ========================================== -->
+            <LinearLayout
+                android:id="@+id/layoutHeroFold"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:gravity="center_horizontal"
+                android:padding="16dp">
+
+                <!-- Greeting / Header -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="8dp">
+                    
+                    <TextView
+                        android:id="@+id/textGreetingName"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="HELLO CHINMAY"
+                        android:textColor="#FFFFFF"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.2"
+                        android:fontFamily="sans-serif-black"/>
+                    
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center"
+                        android:layout_marginTop="2dp">
+                        <View
+                            android:layout_width="6dp"
+                            android:layout_height="6dp"
+                            android:background="@drawable/bg_dot_online"
+                            android:layout_marginRight="6dp"/>
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="SYSTEM STATUS ACTIVE"
+                            android:textColor="#10B981"
+                            android:textSize="9sp"
+                            android:textStyle="bold"
+                            android:letterSpacing="0.1"/>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Orb Command Center (260dp x 260dp) -->
+                <FrameLayout
+                    android:id="@+id/layoutOrbContainer"
+                    android:layout_width="260dp"
+                    android:layout_height="260dp"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="8dp">
+
+                    <!-- Ripple Wave 2 -->
+                    <ImageView
+                        android:id="@+id/orbWaveRipple2"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:src="@drawable/bg_orb_ripple"
+                        android:visibility="invisible"
+                        android:contentDescription="Wave Ripple 2"/>
+
+                    <!-- Ripple Wave 1 -->
+                    <ImageView
+                        android:id="@+id/orbWaveRipple1"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:src="@drawable/bg_orb_ripple"
+                        android:visibility="invisible"
+                        android:contentDescription="Wave Ripple 1"/>
+
+                    <!-- Outer Dashed Ring (Clockwise, large) -->
+                    <ImageView
+                        android:id="@+id/orbOuterRing"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_margin="0dp"
+                        android:src="@drawable/bg_orb_ring_blue"
+                        android:contentDescription="Outer Ring"/>
+
+                    <!-- Inner Dashed Ring (Counter-clockwise, smaller) -->
+                    <ImageView
+                        android:id="@+id/orbOuterRing2"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_margin="16dp"
+                        android:src="@drawable/bg_orb_ring_cyan"
+                        android:contentDescription="Inner Ring"/>
+
+                    <!-- Central Core Glow -->
+                    <com.aria.bridge.Orb3DView
+                        android:id="@+id/orbInnerCore"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_margin="16dp"
+                        android:contentDescription="Orb Core"/>
+                </FrameLayout>
+
+                <!-- State Text -->
+                <TextView
+                    android:id="@+id/textOrbStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:text="ONLINE"
+                    android:textColor="#008CFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.2"/>
+
+                <!-- State Description / System load text -->
+                <TextView
+                    android:id="@+id/textOrbStateDesc"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:text="ARIA is ready to assist you"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="4dp"/>
+
+                <!-- Uptime/Telemetry metrics -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_marginBottom="8dp">
+                    <TextView
+                        android:id="@+id/textCpuLoad"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="CPU: --%"
+                        android:textColor="#94A3B8"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace"/>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="  |  "
+                        android:textColor="#334155"
+                        android:textSize="11sp"/>
+                    <TextView
+                        android:id="@+id/textRamUsage"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="RAM: -- GB"
+                        android:textColor="#94A3B8"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace"/>
+                </LinearLayout>
+
+                <!-- HUD connection chips (2x2 Grid) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="12dp">
+
+                    <!-- Row 1 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- PC status -->
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="horizontal"
+                            android:gravity="center"
+                            android:padding="8dp"
+                            android:background="@drawable/card_background"
+                            android:layout_margin="3dp">
+                            <View
+                                android:id="@+id/dotPcStatus"
+                                android:layout_width="8dp"
+                                android:layout_height="8dp"
+                                android:background="@drawable/bg_dot_offline"/>
+                            <TextView
+                                android:id="@+id/textPcStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="PC OFFLINE"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginLeft="6dp"/>
+                        </LinearLayout>
+
+                        <!-- Chrome status -->
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="horizontal"
+                            android:gravity="center"
+                            android:padding="8dp"
+                            android:background="@drawable/card_background"
+                            android:layout_margin="3dp">
+                            <View
+                                android:id="@+id/dotChromeStatus"
+                                android:layout_width="8dp"
+                                android:layout_height="8dp"
+                                android:background="@drawable/bg_dot_offline"/>
+                            <TextView
+                                android:id="@+id/textChromeStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="CHROME OFFLINE"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginLeft="6dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 2 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- VS Code status -->
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="horizontal"
+                            android:gravity="center"
+                            android:padding="8dp"
+                            android:background="@drawable/card_background"
+                            android:layout_margin="3dp">
+                            <View
+                                android:id="@+id/dotVsCodeStatus"
+                                android:layout_width="8dp"
+                                android:layout_height="8dp"
+                                android:background="@drawable/bg_dot_offline"/>
+                            <TextView
+                                android:id="@+id/textVsCodeStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="VS CODE OFFLINE"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginLeft="6dp"/>
+                        </LinearLayout>
+
+                        <!-- Firebase status -->
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="horizontal"
+                            android:gravity="center"
+                            android:padding="8dp"
+                            android:background="@drawable/card_background"
+                            android:layout_margin="3dp">
+                            <View
+                                android:id="@+id/dotFirebaseStatus"
+                                android:layout_width="8dp"
+                                android:layout_height="8dp"
+                                android:background="@drawable/bg_dot_offline"/>
+                            <TextView
+                                android:id="@+id/textFirebaseStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="FIREBASE OFFLINE"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginLeft="6dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Live Activity Strip -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/card_background"
+                    android:padding="12dp"
+                    android:layout_marginBottom="12dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="LIVE WORKSPACE ACTIVITY"
+                        android:textColor="#64748B"
+                        android:textSize="10sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.1"
+                        android:layout_marginBottom="4dp"/>
+                    <TextView
+                        android:id="@+id/activityWindow"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Current Window: Standby"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12sp"
+                        android:layout_marginBottom="2dp"/>
+                    <TextView
+                        android:id="@+id/activityTask"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Current File: None"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12sp"
+                        android:layout_marginBottom="2dp"/>
+                    <TextView
+                        android:id="@+id/activityLastAction"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Last Action: Idle"
+                        android:textColor="#64748B"
+                        android:textSize="11sp"/>
+                </LinearLayout>
+
+                <!-- Quick Actions Pill Buttons -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_marginBottom="8dp">
+
+                    <!-- Action: Talk -->
+                    <LinearLayout
+                        android:id="@+id/actionTalk"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center"
+                        android:background="@drawable/card_background"
+                        android:paddingVertical="10dp"
+                        android:layout_marginHorizontal="3dp"
+                        android:clickable="true"
+                        android:focusable="true">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🎤 Talk"
+                            android:textColor="#00E5FF"
+                            android:textSize="11sp"
+                            android:textStyle="bold"/>
+                    </LinearLayout>
+
+                    <!-- Action: Control -->
+                    <LinearLayout
+                        android:id="@+id/actionControl"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center"
+                        android:background="@drawable/card_background"
+                        android:paddingVertical="10dp"
+                        android:layout_marginHorizontal="3dp"
+                        android:clickable="true"
+                        android:focusable="true">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🖥 Control"
+                            android:textColor="#00E5FF"
+                            android:textSize="11sp"
+                            android:textStyle="bold"/>
+                    </LinearLayout>
+
+                    <!-- Action: Clipboard -->
+                    <LinearLayout
+                        android:id="@+id/actionClipboard"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center"
+                        android:background="@drawable/card_background"
+                        android:paddingVertical="10dp"
+                        android:layout_marginHorizontal="3dp"
+                        android:clickable="true"
+                        android:focusable="true">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📋 Clip"
+                            android:textColor="#00E5FF"
+                            android:textSize="11sp"
+                            android:textStyle="bold"/>
+                    </LinearLayout>
+
+                    <!-- Action: Screenshot -->
+                    <LinearLayout
+                        android:id="@+id/actionScreenshot"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="horizontal"
+                        android:gravity="center"
+                        android:background="@drawable/card_background"
+                        android:paddingVertical="10dp"
+                        android:layout_marginHorizontal="3dp"
+                        android:clickable="true"
+                        android:focusable="true">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📸 Screen"
+                            android:textColor="#00E5FF"
+                            android:textSize="11sp"
+                            android:textStyle="bold"/>
+                    </LinearLayout>
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <!-- ========================================== -->
+            <!-- ── FOLD 2: Features Launcher Fold ── -->
+            <!-- ========================================== -->
+            <LinearLayout
+                android:id="@+id/layoutFeaturesFold"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginTop="16dp">
+
+                <!-- 1. Remote Control (Grid) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="REMOTE CONTROL"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginLeft="4dp"
+                    android:layout_marginBottom="8dp"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="24dp">
+
+                    <!-- Row 1 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- Desktop -->
+                        <LinearLayout
+                            android:id="@+id/cardRemoteDesktop"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🖥"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Desktop"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Live View Control"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <!-- Browser -->
+                        <LinearLayout
+                            android:id="@+id/cardRemoteBrowser"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🌐"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Browser"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:id="@+id/descBrowserCard"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Chrome CDP Bridge"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 2 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- VS Code -->
+                        <LinearLayout
+                            android:id="@+id/cardRemoteVsCode"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="💻"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="VS Code"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:id="@+id/descVsCodeCard"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Workspace Bridge"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <!-- Files -->
+                        <LinearLayout
+                            android:id="@+id/cardRemoteFiles"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="📂"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Files"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="File Explorer"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- 2. Intelligence Section -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="INTELLIGENCE"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginLeft="4dp"
+                    android:layout_marginBottom="8dp"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="24dp">
+
+                    <!-- Row 1 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- Missions -->
+                        <LinearLayout
+                            android:id="@+id/cardIntelMissions"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🎯"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Missions"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:id="@+id/descMissionsCard"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Active tasks queue"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <!-- Learning -->
+                        <LinearLayout
+                            android:id="@+id/cardIntelLearning"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="📚"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Learning"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="DBMS &amp; DSA revision"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 2 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- Memory -->
+                        <LinearLayout
+                            android:id="@+id/cardIntelMemory"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🧠"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Memory"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Notes &amp; Conversations"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <!-- Career -->
+                        <LinearLayout
+                            android:id="@+id/cardIntelCareer"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="📈"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Career"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:id="@+id/descCareerCard"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Opportunities Tracker"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- 3. Security Section -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="SECURITY GATEWAY"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginLeft="4dp"
+                    android:layout_marginBottom="8dp"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="24dp">
+
+                    <!-- Alerts / Approvals -->
+                    <LinearLayout
+                        android:id="@+id/cardSecurityAlerts"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:background="@drawable/card_background"
+                        android:padding="16dp"
+                        android:layout_margin="4dp"
+                        android:clickable="true"
+                        android:focusable="true">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🛡"
+                            android:textSize="22sp"
+                            android:layout_marginBottom="8dp"/>
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Security Gates"
+                            android:textColor="#FFFFFF"
+                            android:textSize="13sp"
+                            android:textStyle="bold"/>
+                        <TextView
+                            android:id="@+id/badgeApprovalsPending"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0 Pending Requests"
+                            android:textColor="#10B981"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:layout_marginTop="2dp"/>
+                    </LinearLayout>
+
+                    <!-- Activity Log -->
+                    <LinearLayout
+                        android:id="@+id/cardSecurityLog"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:background="@drawable/card_background"
+                        android:padding="16dp"
+                        android:layout_margin="4dp"
+                        android:clickable="true"
+                        android:focusable="true">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📜"
+                            android:textSize="22sp"
+                            android:layout_marginBottom="8dp"/>
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Incidents Log"
+                            android:textColor="#FFFFFF"
+                            android:textSize="13sp"
+                            android:textStyle="bold"/>
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Audit log history"
+                            android:textColor="#64748B"
+                            android:textSize="10sp"
+                            android:layout_marginTop="2dp"/>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- 4. Developer Tools Section -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DEVELOPER TOOLS"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.15"
+                    android:layout_marginLeft="4dp"
+                    android:layout_marginBottom="8dp"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="24dp">
+
+                    <!-- Row 1 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- VS Code Bridge -->
+                        <LinearLayout
+                            android:id="@+id/cardCoreVsCode"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🔌"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="VS Code Bridge"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Plugin daemon"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <!-- Browser Bridge -->
+                        <LinearLayout
+                            android:id="@+id/cardCoreBrowser"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="⚡"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Browser Bridge"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Chrome CDP daemon"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Row 2 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <!-- Telemetry -->
+                        <LinearLayout
+                            android:id="@+id/cardCoreTelemetry"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="📊"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Telemetry"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Database streams"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <!-- System Status -->
+                        <LinearLayout
+                            android:id="@+id/cardCoreHealth"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_background"
+                            android:padding="16dp"
+                            android:layout_margin="4dp"
+                            android:clickable="true"
+                            android:focusable="true">
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="⚙"
+                                android:textSize="22sp"
+                                android:layout_marginBottom="8dp"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="System Status"
+                                android:textColor="#FFFFFF"
+                                android:textSize="13sp"
+                                android:textStyle="bold"/>
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="PC metrics console"
+                                android:textColor="#64748B"
+                                android:textSize="10sp"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Bottom spacer to clear the floating dock navigation -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="88dp"/>
+
+            </LinearLayout>
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+    <!-- ========================================== -->
+    <!-- ── Screen: Control Center (WebView) ── -->
+    <!-- ========================================== -->
+    <LinearLayout
+        android:id="@+id/layoutWebViewContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- Back Header Toolbar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="#0D0E15"
+            android:padding="12dp"
+            android:gravity="center_vertical">
+            <ImageButton
+                android:id="@+id/btnBackFromWebView"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_revert"
+                android:contentDescription="Back"
+                android:tint="#00E5FF"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ARIA CONTROL CENTRE"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginLeft="12dp"
+                android:letterSpacing="0.1"/>
+        </LinearLayout>
+
+        <WebView
+            android:id="@+id/webView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </LinearLayout>
+
+    <!-- ========================================== -->
+    <!-- ── Screen: Security inbox & Approvals ── -->
+    <!-- ========================================== -->
+    <LinearLayout
+        android:id="@+id/layoutAlerts"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- Back Header Toolbar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="#0D0E15"
+            android:padding="12dp"
+            android:gravity="center_vertical">
+            <ImageButton
+                android:id="@+id/btnBackFromAlerts"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_revert"
+                android:contentDescription="Back"
+                android:tint="#00E5FF"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="SECURITY GATEWAY"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginLeft="12dp"
+                android:letterSpacing="0.1"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Safety Approval Queue -->
+            <TextView
+                android:id="@+id/textNoApprovals"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="No pending approvals. System is safe."
+                android:textColor="#64748B"
+                android:textSize="14sp"
+                android:layout_marginBottom="16dp"
+                android:visibility="visible" />
+
+            <!-- Pending Approval Card -->
+            <LinearLayout
+                android:id="@+id/cardPendingApproval"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/card_background_warning"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:layout_marginBottom="16dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/approvalRiskLevel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="RISK LEVEL: CRITICAL"
+                    android:textColor="#EF4444"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.08"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:id="@+id/approvalActionTag"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Action: [SHUTDOWN]"
+                    android:textColor="#94A3B8"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace"
+                    android:layout_marginBottom="10dp" />
+
+                <TextView
+                    android:id="@+id/approvalDescription"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ARIA wants to perform this action on your system."
+                    android:textColor="#F1F5F9"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="4dp" />
+
+                <TextView
+                    android:id="@+id/approvalTimestamp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Requested just now"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:layout_marginBottom="16dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btnApproveRequest"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginRight="6dp"
+                        android:backgroundTint="#00E5FF"
+                        android:text="✅ Approve"
+                        android:textColor="#05060F"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/btnRejectRequest"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginLeft="6dp"
+                        android:backgroundTint="#EF4444"
+                        android:text="❌ Reject"
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/btnLiveCheckin"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:backgroundTint="#00E5FF"
+                android:text="🎥 Request Live Check-in"
+                android:textColor="#05060F"
+                android:textStyle="bold"
+                android:layout_marginBottom="20dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Security Incident History"
+                android:textColor="#64748B"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fillViewport="true">
+                <LinearLayout
+                    android:id="@+id/layoutIncidentsContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ========================================== -->
+    <!-- ── Screen: Missions Monitor ── -->
+    <!-- ========================================== -->
+    <LinearLayout
+        android:id="@+id/layoutMissions"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- Back Header Toolbar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="#0D0E15"
+            android:padding="12dp"
+            android:gravity="center_vertical">
+            <ImageButton
+                android:id="@+id/btnBackFromMissions"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_revert"
+                android:contentDescription="Back"
+                android:tint="#00E5FF"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MISSIONS MONITOR"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginLeft="12dp"
+                android:letterSpacing="0.1"/>
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Active Mission Progress"
+                    android:textColor="#64748B"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="8dp" />
+
+                <!-- Empty Placeholder -->
+                <TextView
+                    android:id="@+id/textNoMissions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="32dp"
+                    android:gravity="center"
+                    android:text="No active mission currently running."
+                    android:textColor="#64748B"
+                    android:textSize="14sp"
+                    android:visibility="visible" />
+
+                <!-- Mission Details Card -->
+                <LinearLayout
+                    android:id="@+id/cardActiveMission"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/card_background"
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:visibility="gone"
+                    android:layout_marginBottom="16dp">
+
+                    <TextView
+                        android:id="@+id/missionGoal"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Goal: "
+                        android:textColor="#F1F5F9"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+
+                    <TextView
+                        android:id="@+id/missionStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Status: "
+                        android:textColor="#00E5FF"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="12dp" />
+
+                    <TextView
+                        android:id="@+id/missionStepsTrace"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="Steps Graph:\n"
+                        android:textColor="#A3B8CC"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <!-- Mission Controls -->
+                <LinearLayout
+                    android:id="@+id/layoutMissionControls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <Button
+                        android:id="@+id/btnPauseMission"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginRight="4dp"
+                        android:backgroundTint="#E59866"
+                        android:text="Pause"
+                        android:textColor="#05060F"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/btnResumeMission"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginHorizontal="2dp"
+                        android:backgroundTint="#00E5FF"
+                        android:text="Resume"
+                        android:textColor="#05060F"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/btnCancelMission"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginLeft="4dp"
+                        android:backgroundTint="#EF4444"
+                        android:text="Cancel"
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+
+    <!-- ========================================== -->
+    <!-- ── Screen: Career Monitor & Profile ── -->
+    <!-- ========================================== -->
+    <LinearLayout
+        android:id="@+id/layoutCareer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- Back Header Toolbar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="#0D0E15"
+            android:padding="12dp"
+            android:gravity="center_vertical">
+            <ImageButton
+                android:id="@+id/btnBackFromCareer"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_revert"
+                android:contentDescription="Back"
+                android:tint="#00E5FF"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="CAREER MONITOR &amp; INSIGHTS"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginLeft="12dp"
+                android:letterSpacing="0.1"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:orientation="vertical"
             android:padding="16dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Active Mission Progress"
+                android:text="Career Opportunities"
                 android:textColor="#64748B"
                 android:textSize="12sp"
                 android:textStyle="bold"
@@ -88,503 +1493,393 @@
 
             <!-- Empty Placeholder -->
             <TextView
-                android:id="@+id/textNoMissions"
+                android:id="@+id/textNoCareers"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="32dp"
                 android:gravity="center"
-                android:text="No active mission currently running."
+                android:text="No job opportunities bookmarked."
                 android:textColor="#64748B"
                 android:textSize="14sp"
                 android:visibility="visible" />
 
-            <!-- Mission Details Card -->
-            <LinearLayout
-                android:id="@+id/cardActiveMission"
+            <ScrollView
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/card_background"
-                android:orientation="vertical"
-                android:padding="16dp"
-                android:visibility="gone"
-                android:layout_marginBottom="16dp">
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fillViewport="true">
 
-                <TextView
-                    android:id="@+id/missionGoal"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Goal: "
-                    android:textColor="#F1F5F9"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="4dp" />
-
-                <TextView
-                    android:id="@+id/missionStatus"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Status: "
-                    android:textColor="#00E5FF"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="12dp" />
-
-                <TextView
-                    android:id="@+id/missionStepsTrace"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:text="Steps Graph:\n"
-                    android:textColor="#A3B8CC"
-                    android:textSize="11sp" />
+                    android:orientation="vertical">
 
-            </LinearLayout>
+                    <LinearLayout
+                        android:id="@+id/layoutCareersContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
 
-            <!-- Mission Controls -->
-            <LinearLayout
-                android:id="@+id/layoutMissionControls"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:visibility="gone">
+                    <!-- Profile Insights Card -->
+                    <LinearLayout
+                        android:id="@+id/layoutProfileInsights"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="20dp"
+                        android:layout_marginBottom="88dp"
+                        android:background="@drawable/bg_insights_card"
+                        android:padding="16dp"
+                        android:visibility="gone">
 
-                <Button
-                    android:id="@+id/btnPauseMission"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginRight="4dp"
-                    android:backgroundTint="#E59866"
-                    android:text="Pause"
-                    android:textColor="#05060F"
-                    android:textStyle="bold" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Profile Insights"
+                            android:textColor="#FFFFFF"
+                            android:textSize="16sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="12dp" />
 
-                <Button
-                    android:id="@+id/btnResumeMission"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginHorizontal="2dp"
-                    android:backgroundTint="#00E5FF"
-                    android:text="Resume"
-                    android:textColor="#05060F"
-                    android:textStyle="bold" />
+                        <!-- Strengths Section -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="STRENGTHS"
+                            android:textColor="#64748B"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="8dp" />
 
-                <Button
-                    android:id="@+id/btnCancelMission"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginLeft="4dp"
-                    android:backgroundTint="#EF4444"
-                    android:text="Cancel"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold" />
+                        <LinearLayout
+                            android:id="@+id/containerStrengths"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginBottom="16dp" />
 
-            </LinearLayout>
+                        <!-- Focus Chips Section -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="CURRENT FOCUS"
+                            android:textColor="#64748B"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="8dp" />
 
+                        <LinearLayout
+                            android:id="@+id/containerFocusChips"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginBottom="16dp" />
+
+                        <!-- Recent Updates Section -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="RECENT CHANGES"
+                            android:textColor="#64748B"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:layout_marginBottom="8dp" />
+
+                        <LinearLayout
+                            android:id="@+id/containerLedger"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+                </LinearLayout>
+            </ScrollView>
         </LinearLayout>
-
-    </ScrollView>
-
-    <!-- ── Tab 5: Approval Queue ── -->
-    <LinearLayout
-        android:id="@+id/layoutApprovals"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_above="@id/bottomNavigation"
-        android:orientation="vertical"
-        android:padding="16dp"
-        android:visibility="gone">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Safety Approval Queue"
-            android:textColor="#64748B"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
-
-        <!-- Placeholder when empty -->
-        <TextView
-            android:id="@+id/textNoApprovals"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="32dp"
-            android:gravity="center"
-            android:text="No pending approval requests. System is safe."
-            android:textColor="#64748B"
-            android:textSize="14sp"
-            android:visibility="visible" />
-
-        <!-- Pending Approval Card -->
-        <LinearLayout
-            android:id="@+id/cardPendingApproval"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/card_background_warning"
-            android:orientation="vertical"
-            android:padding="16dp"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/approvalRiskLevel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="RISK LEVEL: CRITICAL"
-                android:textColor="#EF4444"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:letterSpacing="0.08"
-                android:layout_marginBottom="6dp" />
-
-            <TextView
-                android:id="@+id/approvalActionTag"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Action: [SHUTDOWN]"
-                android:textColor="#94A3B8"
-                android:textSize="11sp"
-                android:fontFamily="monospace"
-                android:layout_marginBottom="10dp" />
-
-            <TextView
-                android:id="@+id/approvalDescription"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="ARIA wants to perform this action on your system."
-                android:textColor="#F1F5F9"
-                android:textSize="15sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="4dp" />
-
-            <TextView
-                android:id="@+id/approvalTimestamp"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Requested just now"
-                android:textColor="#64748B"
-                android:textSize="11sp"
-                android:layout_marginBottom="16dp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <Button
-                    android:id="@+id/btnApproveRequest"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginRight="6dp"
-                    android:backgroundTint="#00E5FF"
-                    android:text="✅  Approve"
-                    android:textColor="#05060F"
-                    android:textStyle="bold" />
-
-                <Button
-                    android:id="@+id/btnRejectRequest"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginLeft="6dp"
-                    android:backgroundTint="#EF4444"
-                    android:text="❌  Reject"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold" />
-
-            </LinearLayout>
-
-        </LinearLayout>
-
     </LinearLayout>
 
-    <!-- ── Tab 6: Career Monitor ── -->
+    <!-- ========================================== -->
+    <!-- ── Screen: Document Scanner (OCR) ── -->
+    <!-- ========================================== -->
     <LinearLayout
-        android:id="@+id/layoutCareer"
+        android:id="@+id/layoutScanner"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_above="@id/bottomNavigation"
         android:orientation="vertical"
-        android:padding="16dp"
         android:visibility="gone">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Career Opportunities"
-            android:textColor="#64748B"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
-
-        <!-- Empty Placeholder -->
-        <TextView
-            android:id="@+id/textNoCareers"
+        <!-- Back Header Toolbar -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="32dp"
-            android:gravity="center"
-            android:text="No job opportunities bookmarked."
-            android:textColor="#64748B"
-            android:textSize="14sp"
-            android:visibility="visible" />
+            android:orientation="horizontal"
+            android:background="#0D0E15"
+            android:padding="12dp"
+            android:gravity="center_vertical">
+            <ImageButton
+                android:id="@+id/btnBackFromScanner"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_revert"
+                android:contentDescription="Back"
+                android:tint="#00E5FF"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="KNOWLEDGE SCANNER"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginLeft="12dp"
+                android:letterSpacing="0.1"/>
+        </LinearLayout>
 
         <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
+            android:layout_height="match_parent"
             android:fillViewport="true">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical">
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Mobile OCR Document Scanner"
+                    android:textColor="#64748B"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="12dp" />
 
                 <LinearLayout
-                    android:id="@+id/layoutCareersContainer"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical" />
-
-                <!-- Profile Insights Card -->
-                <LinearLayout
-                    android:id="@+id/layoutProfileInsights"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:layout_marginTop="20dp"
-                    android:layout_marginBottom="20dp"
                     android:background="@drawable/bg_insights_card"
+                    android:orientation="vertical"
                     android:padding="16dp"
-                    android:visibility="gone">
+                    android:layout_marginBottom="88dp">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Profile Insights"
-                        android:textColor="#FFFFFF"
-                        android:textSize="16sp"
-                        android:textStyle="bold"
-                        android:layout_marginBottom="12dp" />
-
-                    <!-- Strengths Section -->
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="STRENGTHS"
-                        android:textColor="#64748B"
-                        android:textSize="11sp"
-                        android:textStyle="bold"
-                        android:layout_marginBottom="8dp" />
-
+                    <!-- Capture Buttons -->
                     <LinearLayout
-                        android:id="@+id/containerStrengths"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:layout_marginBottom="16dp" />
-
-                    <!-- Focus Chips Section -->
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="CURRENT FOCUS"
-                        android:textColor="#64748B"
-                        android:textSize="11sp"
-                        android:textStyle="bold"
-                        android:layout_marginBottom="8dp" />
-
-                    <LinearLayout
-                        android:id="@+id/containerFocusChips"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:layout_marginBottom="16dp" />
+                        android:layout_marginBottom="16dp">
 
-                    <!-- Recent Updates Section -->
+                        <Button
+                            android:id="@+id/btnScanCamera"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginRight="6dp"
+                            android:backgroundTint="#00E5FF"
+                            android:text="📸 Camera"
+                            android:textColor="#05060F"
+                            android:textStyle="bold" />
+
+                        <Button
+                            android:id="@+id/btnScanGallery"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginLeft="6dp"
+                            android:backgroundTint="#334155"
+                            android:text="🖼 Gallery"
+                            android:textColor="#FFFFFF"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- Image Preview and Quality Status -->
+                    <ImageView
+                        android:id="@+id/scanPreviewImage"
+                        android:layout_width="match_parent"
+                        android:layout_height="180dp"
+                        android:background="#0F172A"
+                        android:scaleType="fitCenter"
+                        android:layout_marginBottom="8dp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/textOcrConfidence"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#00E5FF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="12dp"
+                        android:gravity="center"
+                        android:visibility="gone" />
+
+                    <!-- Title Input -->
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="RECENT CHANGES"
+                        android:text="DOCUMENT TITLE"
                         android:textColor="#64748B"
                         android:textSize="11sp"
                         android:textStyle="bold"
-                        android:layout_marginBottom="8dp" />
+                        android:layout_marginBottom="4dp" />
 
-                    <LinearLayout
-                        android:id="@+id/containerLedger"
+                    <EditText
+                        android:id="@+id/editScanTitle"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical" />
+                        android:backgroundTint="#334155"
+                        android:hint="Enter note title..."
+                        android:textColor="#F1F5F9"
+                        android:textColorHint="#475569"
+                        android:textSize="14sp"
+                        android:inputType="text"
+                        android:maxLines="1"
+                        android:layout_marginBottom="16dp" />
 
+                    <!-- Extracted Text Review -->
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="EXTRACTED TEXT REVIEW"
+                        android:textColor="#64748B"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+
+                    <EditText
+                        android:id="@+id/editScanText"
+                        android:layout_width="match_parent"
+                        android:layout_height="180dp"
+                        android:background="#0F172A"
+                        android:gravity="top|left"
+                        android:hint="Extracted OCR text will appear here. You can edit it before saving."
+                        android:textColor="#CBD5E1"
+                        android:textColorHint="#475569"
+                        android:textSize="12sp"
+                        android:inputType="textMultiLine"
+                        android:scrollbars="vertical"
+                        android:padding="8dp"
+                        android:layout_marginBottom="16dp" />
+
+                    <!-- Ingest Button -->
+                    <Button
+                        android:id="@+id/btnIngestScan"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:backgroundTint="#00E5FF"
+                        android:text="📥 Ingest to Knowledge Vault"
+                        android:textColor="#05060F"
+                        android:textStyle="bold"
+                        android:enabled="false" />
                 </LinearLayout>
-
             </LinearLayout>
-
         </ScrollView>
-
     </LinearLayout>
 
-    <!-- ── Tab 2: Document Scanner ── -->
-    <ScrollView
-        android:id="@+id/layoutScanner"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_above="@id/bottomNavigation"
-        android:fillViewport="true"
-        android:visibility="gone">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Mobile OCR Document Scanner"
-                android:textColor="#64748B"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="12dp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_insights_card"
-                android:orientation="vertical"
-                android:padding="16dp"
-                android:layout_marginBottom="16dp">
-
-                <!-- Capture Buttons -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginBottom="16dp">
-
-                    <Button
-                        android:id="@+id/btnScanCamera"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:layout_marginRight="6dp"
-                        android:backgroundTint="#00E5FF"
-                        android:text="📸 Camera"
-                        android:textColor="#05060F"
-                        android:textStyle="bold" />
-
-                    <Button
-                        android:id="@+id/btnScanGallery"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:layout_marginLeft="6dp"
-                        android:backgroundTint="#334155"
-                        android:text="🖼 Gallery"
-                        android:textColor="#FFFFFF"
-                        android:textStyle="bold" />
-
-                </LinearLayout>
-
-                <!-- Image Preview and Quality Status -->
-                <ImageView
-                    android:id="@+id/scanPreviewImage"
-                    android:layout_width="match_parent"
-                    android:layout_height="180dp"
-                    android:background="#0F172A"
-                    android:scaleType="fitCenter"
-                    android:layout_marginBottom="8dp"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/textOcrConfidence"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:textColor="#00E5FF"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="12dp"
-                    android:gravity="center"
-                    android:visibility="gone" />
-
-                <!-- Title Input -->
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="DOCUMENT TITLE"
-                    android:textColor="#64748B"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="4dp" />
-
-                <EditText
-                    android:id="@+id/editScanTitle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:backgroundTint="#334155"
-                    android:hint="Enter note title..."
-                    android:textColor="#F1F5F9"
-                    android:textColorHint="#475569"
-                    android:textSize="14sp"
-                    android:inputType="text"
-                    android:maxLines="1"
-                    android:layout_marginBottom="16dp" />
-
-                <!-- Extracted Text Review -->
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="EXTRACTED TEXT REVIEW"
-                    android:textColor="#64748B"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="4dp" />
-
-                <EditText
-                    android:id="@+id/editScanText"
-                    android:layout_width="match_parent"
-                    android:layout_height="180dp"
-                    android:background="#0F172A"
-                    android:gravity="top|left"
-                    android:hint="Extracted OCR text will appear here. You can edit it before saving."
-                    android:textColor="#CBD5E1"
-                    android:textColorHint="#475569"
-                    android:textSize="12sp"
-                    android:inputType="textMultiLine"
-                    android:scrollbars="vertical"
-                    android:padding="8dp"
-                    android:layout_marginBottom="16dp" />
-
-                <!-- Ingest Button -->
-                <Button
-                    android:id="@+id/btnIngestScan"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:backgroundTint="#00E5FF"
-                    android:text="📥 Ingest to Knowledge Vault"
-                    android:textColor="#05060F"
-                    android:textStyle="bold"
-                    android:enabled="false" />
-
-            </LinearLayout>
-
-        </LinearLayout>
-
-    </ScrollView>
-
-    <!-- ── Bottom Navigation View ── -->
-    <com.google.android.material.bottomnavigation.BottomNavigationView
-        android:id="@+id/bottomNavigation"
-        android:layout_width="match_parent"
+    <!-- ========================================== -->
+    <!-- ── Floating Bottom Navigation Dock ── -->
+    <!-- ========================================== -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/floatingNavDock"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
-        android:background="#0D0E15"
-        app:itemIconTint="#A3B8CC"
-        app:itemTextColor="#A3B8CC" />
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="24dp"
+        app:cardCornerRadius="28dp"
+        app:cardElevation="8dp"
+        app:cardBackgroundColor="#00000000">
+
+        <!-- Custom Background shape applied as layout background -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:background="@drawable/bg_floating_dock"
+            android:paddingHorizontal="16dp"
+            android:gravity="center">
+
+            <!-- Nav: Home -->
+            <LinearLayout
+                android:id="@+id/navHome"
+                android:layout_width="72dp"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?android:attr/selectableItemBackgroundBorderless">
+                <ImageView
+                    android:id="@+id/iconHome"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@android:drawable/ic_menu_today"
+                    android:tint="#00E5FF"
+                    android:contentDescription="Home"/>
+                <TextView
+                    android:id="@+id/textHome"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Home"
+                    android:textColor="#00E5FF"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+
+            <!-- Nav: Control -->
+            <LinearLayout
+                android:id="@+id/navControl"
+                android:layout_width="72dp"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?android:attr/selectableItemBackgroundBorderless">
+                <ImageView
+                    android:id="@+id/iconControl"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@android:drawable/ic_menu_slideshow"
+                    android:tint="#64748B"
+                    android:contentDescription="Control"/>
+                <TextView
+                    android:id="@+id/textControl"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Control"
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+
+            <!-- Nav: Profile -->
+            <LinearLayout
+                android:id="@+id/navProfile"
+                android:layout_width="72dp"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?android:attr/selectableItemBackgroundBorderless">
+                <ImageView
+                    android:id="@+id/iconProfile"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@android:drawable/ic_menu_myplaces"
+                    android:tint="#64748B"
+                    android:contentDescription="Profile"/>
+                <TextView
+                    android:id="@+id/textProfile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Profile"
+                    android:textColor="#64748B"
+                    android:textSize="10sp"
+                    android:layout_marginTop="2dp"/>
+            </LinearLayout>
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
 
 </RelativeLayout>

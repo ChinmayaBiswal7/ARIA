@@ -9,13 +9,24 @@ try:
 except ImportError:
     psutil = None
 
+import time
+
+_last_resource_check = 0.0
+_cached_resource_ok = True
+
 def check_system_resources() -> bool:
+    global _last_resource_check, _cached_resource_ok
     if psutil is None:
         return True
+    now = time.time()
+    if now - _last_resource_check < 5.0:
+        return _cached_resource_ok
     try:
         cpu_ok = psutil.cpu_percent(interval=None) < 85.0
         ram_ok = psutil.virtual_memory().percent < 90.0
-        return cpu_ok and ram_ok
+        _cached_resource_ok = cpu_ok and ram_ok
+        _last_resource_check = now
+        return _cached_resource_ok
     except Exception as e:
         print(f"[Scheduler] Error checking system resources: {e}")
         return True

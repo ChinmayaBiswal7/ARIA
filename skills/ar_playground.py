@@ -244,12 +244,22 @@ class ARPlayground:
         self.clear_canvas()
 
         if self._mode == "ar3d":
+            import time
+            t0 = time.time()
             try:
                 cv2.destroyWindow(self.WINDOW)
             except Exception:
                 pass
+            print(f"[ARPlayground Profiler] Destroyed OpenCV window in {time.time() - t0:.3f}s")
+            
+            t_start = time.time()
             self.mode_ar3d.start()
+            print(f"[ARPlayground Profiler] mode_ar3d.start() returned in {time.time() - t_start:.3f}s")
+            
+            t_load = time.time()
             self.mode_ar3d.load_model("crystal")
+            print(f"[ARPlayground Profiler] mode_ar3d.load_model('crystal') queued in {time.time() - t_load:.3f}s")
+            
             if not getattr(self, "_announcer_started", False):
                 self._announcer_started = True
                 threading.Thread(target=self._progress_announcer, daemon=True).start()

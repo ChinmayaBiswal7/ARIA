@@ -28,7 +28,7 @@ class VoiceEmotionAnalyzer:
 
             # Safeguard: if audio is too short or silent
             duration = len(audio_np) / sample_rate
-            if duration < 0.4:
+            if duration < 1.2:
                 return "neutral"
 
             # Calculate RMS energy
@@ -57,7 +57,7 @@ class VoiceEmotionAnalyzer:
             emotion = "neutral"
             
             is_tired = (rms_mean < 0.015 and centroid_mean < 1300 and pitch_std < 22)
-            is_stressed = (centroid_mean > 2400 or pitch_std > 55 or (pitch_mean > 220 and rms_mean > 0.06))
+            is_stressed = (centroid_mean > 2700 or pitch_std > 60 or (pitch_mean > 220 and rms_mean > 0.06))
 
             if is_stressed:
                 emotion = "stressed"

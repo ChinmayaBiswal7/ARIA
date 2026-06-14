@@ -29,6 +29,8 @@ import threading
 import time
 import math
 import urllib.request
+from dataclasses import dataclass
+from collections import deque
 
 import cv2
 import pyautogui
@@ -84,6 +86,359 @@ VOLUME_COOL   = 0.15       # seconds between volume keystrokes
 
 # Frame rate — gesture thread sleeps to this interval
 FRAME_INTERVAL = 1.0 / 30  # 30 fps for smoother tracking
+
+# ─── Iron Man Layer 2/3/4 ─ State Machine + Spatial Mapper + Drag ────────────
+
+@dataclass
+class GestureFrame:
+    """Snapshot of one hand's state emitted by GestureStateMachine."""
+    gesture: str          # open_palm / fist / point / pinch / two_finger / thumbs_down / unknown
+    hold_time: float      # seconds the same gesture has been held continuously
+    velocity: tuple       # (vx, vy) — normalised frame-to-frame palm delta, averaged over 5 frames
+    palm_center: tuple    # (px, py) — normalised 0-1, middle-MCP (landmark 9) proxy
+    fingers: list         # [thumb, index, middle, ring, pinky] — bool
+    lm: object = None     # raw MediaPipe landmark list (for special checks)
+
+
+@dataclass
+class ARIACommand:
+    """High-level ARIA action emitted by SpatialCommandMapper."""
+    action: str
+    direction: str = ""
+    x: int = 0
+    y: int = 0
+
+
+# Velocity threshold (normalised units/frame) to trigger a swipe command.
+# 0.12 is deliberate — higher than 0.08 to avoid false triggers from
+# ordinary cursor-range hand movement.
+SWIPE_VEL_THRESHOLD = 0.12
+
+
+class GestureStateMachine:
+    """
+    Layer 2 — converts raw MediaPipe landmarks into a named GestureFrame.
+
+    Tracks:
+      - current gesture name (classified from finger state + pinch distance)
+      - hold time (seconds the same gesture has been held without changing)
+      - palm velocity (rolling 5-frame average of palm-center displacement)
+    """
+
+    def __init__(self):
+        self.current_gesture = "unknown"
+        self.gesture_start_time = time.time()
+        self.prev_palm_center = None
+        self.velocity_buffer = deque(maxlen=5)
+
+    # ── Classifier ────────────────────────────────────────────────────────────
+
+    def _classify(self, lm, fingers: list) -> str:
+        """
+        Priority order:
+          1. pinch   (index tip + thumb tip distance < 0.055)
+          2. thumbs_down  (4 fingers folded, thumb pointing DOWN)
+          3. open_palm    (all 4 fingers extended)
+          4. fist         (all 4 fingers curled, thumb not down)
+          5. point        (index only)
+          6. two_finger   (index + middle only)
+          7. unknown
+        """
+        # 1. Pinch — takes highest priority
+        if _dist(lm[4], lm[8]) < 0.055:
+            return "pinch"
+
+        f = fingers  # [thumb, index, middle, ring, pinky]
+
+        # 2 / 4. All four fingers curled (fist or thumbs_down)
+        if not f[1] and not f[2] and not f[3] and not f[4]:
+            palm_len = _dist(lm[0], lm[9])
+            if palm_len > 0:
+                four_folded = (
+                    lm[8].y > lm[6].y and lm[12].y > lm[10].y and
+                    lm[16].y > lm[14].y and lm[20].y > lm[18].y
+                )
+                if (four_folded and lm[4].y > lm[3].y and
+                        _dist(lm[4], lm[9]) > palm_len * 1.2):
+                    return "thumbs_down"
+            return "fist"
+
+        # 3. Open palm — all four fingers up
+        if f[1] and f[2] and f[3] and f[4]:
+            return "open_palm"
+
+        # 5. Point — index only
+        if f[1] and not f[2] and not f[3] and not f[4]:
+            return "point"
+
+        # 6. Two-finger scroll pose
+        if f[1] and f[2] and not f[3] and not f[4]:
+            return "two_finger"
+
+        return "unknown"
+
+    # ── Palm centre (stable landmark) ─────────────────────────────────────────
+
+    @staticmethod
+    def _get_palm_center(lm) -> tuple:
+        """Middle MCP (landmark 9) — stable, minimally affected by finger extension."""
+        return (lm[9].x, lm[9].y)
+
+    # ── Update ────────────────────────────────────────────────────────────────
+
+    def update(self, lm) -> GestureFrame:
+        fingers = _fingers_up(lm)
+        gesture = self._classify(lm, fingers)
+        palm_center = self._get_palm_center(lm)
+
+        # Rolling velocity — palm displacement per tick
+        if self.prev_palm_center is not None:
+            dx = palm_center[0] - self.prev_palm_center[0]
+            dy = palm_center[1] - self.prev_palm_center[1]
+            self.velocity_buffer.append((dx, dy))
+        self.prev_palm_center = palm_center
+
+        # Hold time — resets to 0 whenever the classified gesture changes
+        if gesture == self.current_gesture:
+            hold_time = time.time() - self.gesture_start_time
+        else:
+            self.current_gesture = gesture
+            self.gesture_start_time = time.time()
+            hold_time = 0.0
+
+        n = max(len(self.velocity_buffer), 1)
+        avg_vx = sum(v[0] for v in self.velocity_buffer) / n
+        avg_vy = sum(v[1] for v in self.velocity_buffer) / n
+
+        return GestureFrame(
+            gesture=gesture,
+            hold_time=hold_time,
+            velocity=(avg_vx, avg_vy),
+            palm_center=palm_center,
+            fingers=fingers,
+            lm=lm,
+        )
+
+    def reset(self):
+        self.current_gesture = "unknown"
+        self.gesture_start_time = time.time()
+        self.prev_palm_center = None
+        self.velocity_buffer.clear()
+
+
+class SpatialCommandMapper:
+    """
+    Layer 3 — translates a GestureFrame into an ARIACommand.
+
+    Design principles:
+      - Velocity-based intent: slow hand ≠ command, fast flick = command.
+      - Hold-time confirmation: prevents accidental triggers.
+      - Pinch-engage gate: cursor only moves while pinch is held (≥ 0.18 s);
+        a quick tap (< 0.18 s) fires a click instead.
+      - Gesture isolation: open_palm wake (≥ 0.8 s) and swipe (< 0.5 s)
+        do not overlap — no ghost wake during swipe.
+      - thumbs_down → stop speaking (separate from open_palm entirely).
+    """
+
+    def __init__(self):
+        # Pinch-engage mode
+        self._pinch_start: float | None = None
+        self._engage = False          # True while pinch held ≥ 0.18s
+
+        # Single-fire guards (prevent re-triggering within same gesture hold)
+        self._wake_armed = False
+        self._stop_armed = False
+
+        # Throw machine
+        self._throw_primed = False
+        self._throw_prime_time = 0.0
+
+        # Cooldowns
+        self._last_swipe_time = 0.0
+        self._swipe_cool = 0.8        # min seconds between tab switches
+        self._last_scroll_time = 0.0
+        self._scroll_cool = 0.12
+
+    def process(self, frame: GestureFrame) -> "ARIACommand | None":
+        g = frame.gesture
+        vx, vy = frame.velocity
+        hold = frame.hold_time
+        now = time.time()
+        speed = math.sqrt(vx ** 2 + vy ** 2)
+
+        # ── PINCH: engage cursor mode ─────────────────────────────────────────
+        # Sustained pinch (≥ 0.18 s) → engage cursor, hand tracks screen.
+        # Quick tap (< 0.18 s release) → left click.
+        if g == "pinch":
+            if self._pinch_start is None:
+                self._pinch_start = now
+            pinch_hold = now - self._pinch_start
+            if pinch_hold >= 0.18:
+                self._engage = True
+                return ARIACommand(action="move_cursor")
+            return None   # still within tap window — wait
+        else:
+            if self._pinch_start is not None:
+                pinch_hold = now - self._pinch_start
+                self._pinch_start = None
+                if pinch_hold < 0.18 and not self._engage:
+                    self._engage = False
+                    return ARIACommand(action="mouse_click")
+            self._engage = False
+
+        # ── THUMBS DOWN: stop speaking ────────────────────────────────────────
+        # Clearly separated from open-palm — no ambiguity.
+        if g == "thumbs_down":
+            if not self._stop_armed and hold >= 0.25:
+                self._stop_armed = True
+                return ARIACommand(action="stop_speaking")
+        else:
+            self._stop_armed = False
+
+        # ── OPEN PALM: throw (if primed) then wake (static) then swipe (fast) ──
+        if g == "open_palm":
+            # Throw check takes HIGHEST priority inside open_palm.
+            # If throw is primed, this frame is either a throw or a no-op —
+            # we never let a coincidental swipe fire while the user is flicking.
+            if self._throw_primed:
+                if now - self._throw_prime_time < 1.2:
+                    if speed > 0.10:
+                        self._throw_primed = False
+                        direction = "right" if vx > 0 else "left"
+                        return ARIACommand(action="throw_window", direction=direction)
+                    # Primed but not fast enough yet — keep waiting
+                    return None
+                else:
+                    # Prime expired without a flick — clear it and swallow this
+                    # open-palm frame so the user's "give up" motion isn't
+                    # misread as a tab swipe.
+                    self._throw_primed = False
+                    return None
+
+            # Wake: static hold >= 0.8s — speed must be below swipe threshold
+            # so a swipe-that-slows-down never double-fires as wake.
+            if hold >= 0.8 and speed < SWIPE_VEL_THRESHOLD:
+                if not self._wake_armed:
+                    self._wake_armed = True
+                    return ARIACommand(action="wake_aria")
+            else:
+                self._wake_armed = False
+
+            # Swipe tab: fast lateral motion, hold < 0.5s
+            # (long holds are wake candidates, not swipes)
+            if hold < 0.5 and now - self._last_swipe_time > self._swipe_cool:
+                if vx > SWIPE_VEL_THRESHOLD:
+                    self._last_swipe_time = now
+                    return ARIACommand(action="switch_tab", direction="right")
+                if vx < -SWIPE_VEL_THRESHOLD:
+                    self._last_swipe_time = now
+                    return ARIACommand(action="switch_tab", direction="left")
+
+            # Vertical scroll via open palm
+            if now - self._last_scroll_time > self._scroll_cool:
+                if vy < -SWIPE_VEL_THRESHOLD:
+                    self._last_scroll_time = now
+                    return ARIACommand(action="scroll", direction="up")
+                if vy > SWIPE_VEL_THRESHOLD:
+                    self._last_scroll_time = now
+                    return ARIACommand(action="scroll", direction="down")
+
+        else:
+            self._wake_armed = False
+
+        # ── FIST: prime window throw ──────────────────────────────────────────
+        if g == "fist":
+            if hold >= 0.5:
+                self._throw_primed = True
+                self._throw_prime_time = now
+            return None   # fist itself fires no command
+
+        # Expire stale throw prime
+        if g not in ("fist", "open_palm") and now - self._throw_prime_time > 1.2:
+            self._throw_primed = False
+
+        return None
+
+    def reset(self):
+        self._pinch_start = None
+        self._engage = False
+        self._wake_armed = False
+        self._stop_armed = False
+        self._throw_primed = False
+        self._last_swipe_time = 0.0
+        self._last_scroll_time = 0.0
+
+
+class GestureDragMachine:
+    """
+    Layer 4 — 4-state drag: IDLE → GRABBING → DRAGGING → IDLE.
+
+    Activation guard: only arms when fist is formed in the tab-bar zone
+    (top TAB_BAR_Y_MAX of the normalised frame). Closing your fist anywhere
+    else does NOT trigger a drag — preventing accidental tab moves.
+
+    Timeline:
+        fist appears in tab zone   → GRABBING
+        fist held ≥ 0.4 s          → DRAGGING (mouseDown fires)
+        fist released               → IDLE     (mouseUp fires)
+        non-fist before 0.4 s      → cancel back to IDLE
+    """
+
+    GRAB_CONFIRM_TIME = 0.40   # seconds of fist hold before mouseDown fires
+    TAB_BAR_Y_MAX     = 0.08   # top 8% of normalised frame ≈ browser tab bar
+
+    def __init__(self, screen_w: int, screen_h: int):
+        self._state = "IDLE"           # IDLE | GRABBING | DRAGGING
+        self._grab_start_time = 0.0
+        self._grab_start_pos: tuple = (0, 0)
+        self._sw = screen_w
+        self._sh = screen_h
+
+    def update(self, frame: GestureFrame) -> None:
+        """Execute mouse side-effects; called every frame from _process."""
+        g = frame.gesture
+        px, py = frame.palm_center
+        sx = int(px * self._sw)
+        sy = int(py * self._sh)
+        now = time.time()
+
+        if self._state == "IDLE":
+            if g == "fist" and py < self.TAB_BAR_Y_MAX:
+                self._state = "GRABBING"
+                self._grab_start_time = now
+                self._grab_start_pos = (sx, sy)
+                print(f"[GestureDrag] Grab intent at ({sx},{sy}) — tab-bar zone")
+
+        elif self._state == "GRABBING":
+            if g != "fist":
+                self._state = "IDLE"
+                print("[GestureDrag] Grab cancelled — fist released before confirm")
+                return
+            if now - self._grab_start_time >= self.GRAB_CONFIRM_TIME:
+                self._state = "DRAGGING"
+                gx, gy = self._grab_start_pos
+                pyautogui.mouseDown(gx, gy, _pause=False)
+                print(f"[GestureDrag] Drag confirmed — mouseDown at ({gx},{gy})")
+
+        elif self._state == "DRAGGING":
+            if g == "fist":
+                pyautogui.moveTo(sx, sy, _pause=False)
+            else:
+                # Any non-fist gesture = release
+                pyautogui.mouseUp(_pause=False)
+                self._state = "IDLE"
+                print(f"[GestureDrag] Drag released — mouseUp at ({sx},{sy})")
+
+    def abort(self):
+        """Immediately release mouse if dragging (hand loss / shutdown)."""
+        if self._state == "DRAGGING":
+            try:
+                pyautogui.mouseUp(_pause=False)
+            except Exception:
+                pass
+            print("[GestureDrag] Drag aborted — mouseUp (forced)")
+        self._state = "IDLE"
+
 
 # ─── Model auto-download ──────────────────────────────────────────────────────
 
@@ -179,6 +534,11 @@ class GestureController:
         self._fps_t0     = 0.0
 
         self._sw, self._sh = pyautogui.size()
+
+        # ── Iron Man Layers 2/3/4 ─────────────────────────────────────────────
+        self._state_machine  = GestureStateMachine()
+        self._spatial_mapper = SpatialCommandMapper()
+        self._drag_machine   = GestureDragMachine(screen_w=self._sw, screen_h=self._sh)
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -442,27 +802,115 @@ class GestureController:
                     
         return False
 
+    def _move_cursor_palm(self, lm, pt=None):
+        """
+        Cursor tracking used during pinch-engage mode.
+        Tracks palm center (lm[9]) or the supplied normalised (pt) coordinate,
+        with the same dynamic EMA smoothing as _move_cursor.
+        """
+        raw_x_n, raw_y_n = pt if pt is not None else (lm[9].x, lm[9].y)
+
+        # Clamp to active zone (reuse same constants for consistency)
+        clamped_x = max(ACTIVE_X_MIN, min(ACTIVE_X_MAX, raw_x_n))
+        clamped_y = max(ACTIVE_Y_MIN, min(ACTIVE_Y_MAX, raw_y_n))
+        norm_x = (clamped_x - ACTIVE_X_MIN) / (ACTIVE_X_MAX - ACTIVE_X_MIN)
+        norm_y = (clamped_y - ACTIVE_Y_MIN) / (ACTIVE_Y_MAX - ACTIVE_Y_MIN)
+        raw_x = norm_x * self._sw
+        raw_y = norm_y * self._sh
+
+        if self._sx is None:
+            self._sx, self._sy = raw_x, raw_y
+        else:
+            dist = math.sqrt((raw_x - self._sx) ** 2 + (raw_y - self._sy) ** 2)
+            if dist < 10.0:
+                alpha = MIN_ALPHA
+            elif dist > 150.0:
+                alpha = MAX_ALPHA
+            else:
+                alpha = MIN_ALPHA + (MAX_ALPHA - MIN_ALPHA) * ((dist - 10.0) / 140.0)
+            self._sx = alpha * raw_x + (1 - alpha) * self._sx
+            self._sy = alpha * raw_y + (1 - alpha) * self._sy
+
+        tx, ty = int(self._sx), int(self._sy)
+        cx, cy = pyautogui.position()
+        if abs(tx - cx) > DEADZONE_PX or abs(ty - cy) > DEADZONE_PX:
+            pyautogui.moveTo(tx, ty, _pause=False)
+
+    def _execute(self, command: ARIACommand, frame: GestureFrame) -> None:
+        """Dispatch an ARIACommand to the appropriate system action."""
+        action = command.action
+
+        if action == "move_cursor":
+            # Cursor tracks palm center while pinch is held
+            self._move_cursor_palm(frame.lm, pt=frame.palm_center)
+
+        elif action == "mouse_click":
+            now = time.time()
+            if now - self._last_click > CLICK_COOL:
+                pyautogui.click(_pause=False)
+                self._last_click = now
+                print("[GestureControl] [Iron Man] Left click (quick pinch tap)")
+
+        elif action == "wake_aria":
+            print("[GestureControl] [Iron Man] GESTURE_WAKE — open palm hold")
+            if self._callback:
+                self._callback("GESTURE_WAKE")
+
+        elif action == "stop_speaking":
+            print("[GestureControl] [Iron Man] GESTURE_STOP — thumbs down")
+            if self._callback:
+                self._callback("GESTURE_STOP")
+
+        elif action == "switch_tab":
+            key = "ctrl+tab" if command.direction == "right" else "ctrl+shift+tab"
+            pyautogui.hotkey(*key.split("+"), _pause=False)
+            print(f"[GestureControl] [Iron Man] Switch tab {command.direction}")
+
+        elif action == "scroll":
+            amount = -3 if command.direction == "up" else 3
+            pyautogui.scroll(amount, _pause=False)
+
+        elif action == "throw_window":
+            arrow = "right" if command.direction == "right" else "left"
+            pyautogui.hotkey("win", "shift", arrow, _pause=False)
+            print(f"[GestureControl] [Iron Man] Throw window {command.direction}")
+
     def _process(self, lm):
-        """Run all gesture checks for one frame's landmarks."""
+        """
+        Iron Man 3-layer gesture pipeline:
+          lm → GestureStateMachine → GestureFrame
+             → SpatialCommandMapper → ARIACommand
+             → _execute()  (fires system action)
+          GestureDragMachine runs in parallel for tab-zone drag/drop.
+
+        Legacy high-level events (wave, thumbs-up confirm) are still checked
+        first so existing voice-email confirm / cancel gestures keep working.
+        """
         fingers = _fingers_up(lm)
-        now     = time.time()
-        
-        # Check for high-level events (Thumbs Up, Thumbs Down, Wave) first.
-        # If triggered, bypass standard mouse control commands.
+        now = time.time()
+
+        # ── Legacy high-level events (wave / thumbs-up confirm) ───────────────
+        # These take priority so existing callback wiring is not broken.
         if self._check_high_level_events(lm, fingers, now):
-            self._reset_state()
+            # Reset Iron Man layers on high-level trigger to avoid ghost state
+            self._state_machine.reset()
+            self._spatial_mapper.reset()
             return
-            
-        self._move_cursor(lm)
-        self._check_click(lm, fingers, now)
-        self._check_right_click(lm, fingers, now)
-        self._check_double_click(lm, fingers, now)
-        self._check_drag_and_drop(lm, fingers, now)
-        self._check_scroll(lm, fingers, now)
-        self._check_volume(lm, fingers, now)
+
+        # ── Layer 2: classify gesture + compute hold/velocity ─────────────────
+        frame = self._state_machine.update(lm)
+
+        # ── Layer 3: map to command ───────────────────────────────────────────
+        command = self._spatial_mapper.process(frame)
+        if command:
+            self._execute(command, frame)
+
+        # ── Layer 4: drag machine (parallel, side-effect only) ────────────────
+        self._drag_machine.update(frame)
 
     def _reset_state(self):
-        """Reset smoothing and pinch/drag states when hand leaves frame."""
+        """Reset all state when hand leaves the camera frame."""
+        # Legacy cursor / click / scroll state
         self._sx = self._sy = None
         self._prev_mid_y = None
         self._prev_vol_y = None
@@ -473,7 +921,11 @@ class GestureController:
         if self._is_dragging:
             pyautogui.mouseUp(_pause=False)
             self._is_dragging = False
-            print("[GestureControl] [drag] Drag released automatically because hand left frame.")
+            print("[GestureControl] [drag] Drag released automatically (hand left frame)")
+        # Iron Man layer reset
+        self._state_machine.reset()
+        self._spatial_mapper.reset()
+        self._drag_machine.abort()
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 

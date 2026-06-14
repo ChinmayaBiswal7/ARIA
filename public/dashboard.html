@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#05080e">
+  <title>ARIA Dashboard</title>
+  <meta name="description" content="ARIA Command Center — Live Intelligence Dashboard">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+
+  <!-- D3 + TopoJSON for real world map (Local copies) -->
+  <script src="/public/d3.min.js"></script>
+  <script src="/public/topojson-client.min.js"></script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <!-- External Stylesheet -->
+  <link rel="stylesheet" href="/public/dashboard.css">
+</head>
+<body>
+
+  <!-- Floating Story Card Modal -->
+  <div class="story-card-modal" id="story-card-modal">
+    <div class="story-card-header">
+      <span class="story-card-cat" id="story-modal-cat">-</span>
+      <button class="story-card-close" onclick="closeStoryModal()">×</button>
+    </div>
+    <div class="story-card-headline" id="story-modal-headline">-</div>
+    <div class="story-card-body" id="story-modal-body">-</div>
+    <div class="story-card-footer">
+      <span class="story-card-source" id="story-modal-source">-</span>
+      <span class="story-card-badge neutral" id="story-modal-sentiment">neutral</span>
+      <button class="story-card-btn" id="story-modal-btn">Read More</button>
+    </div>
+  </div>
+
+  <div class="command-grid">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="tb-left">
+        <span class="tb-logo">ARIA // COMMAND CENTER</span>
+        <span class="tb-sep"></span>
+        <span class="tb-label" id="vp-active-label">Ambient</span>
+        <span class="tb-sep"></span>
+        <a href="/design_lab.html" class="tb-label" style="color:rgba(0,229,255,.8);text-decoration:none;cursor:pointer;transition:color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='rgba(0,229,255,.8)'">⬡ Design Lab</a>
+      </div>
+      <div class="tb-right">
+        <div class="status-pill">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-label">Online</span>
+        </div>
+        <span class="tb-clock" id="tb-clock">00:00:00</span>
+      </div>
+    </header>
+
+    <!-- Map Area -->
+    <section class="panel map-panel">
+      <div class="panel-header">
+        <span class="panel-title">Geo-Intelligence Grid</span>
+        <span class="panel-tag" id="map-node-count">0 nodes active</span>
+      </div>
+      <div class="map-wrap" id="map-wrap">
+        <svg id="worldmap"></svg>
+        <div class="map-tooltip" id="map-tooltip">Tooltip</div>
+      </div>
+      <div class="panel-corner tl"></div>
+      <div class="panel-corner tr"></div>
+      <div class="panel-corner bl"></div>
+      <div class="panel-corner br"></div>
+    </section>
+
+    <!-- Right Sidebar (Diagnostics & Headlines) -->
+    <aside class="right-col">
+      <!-- Diagnostics Feed -->
+      <section class="panel diag-panel" style="flex: 1.2;">
+        <div class="panel-header">
+          <span class="panel-title">Diagnostics Stream</span>
+          <span class="panel-tag" id="diag-count">0 events</span>
+        </div>
+        <div class="diag-feed" id="diag-feed"></div>
+        <div class="panel-corner tl"></div><div class="panel-corner tr"></div><div class="panel-corner bl"></div><div class="panel-corner br"></div>
+      </section>
+
+      <!-- Live News Headlines -->
+      <section class="panel news-headlines-panel">
+        <div class="panel-header">
+          <span class="panel-title" id="headlines-tag">Live Headlines Feed</span>
+          <span class="panel-tag" id="map-node-label">awaiting news</span>
+        </div>
+        <div class="headlines-list" id="headlines-list">
+          <div style="font-family:var(--mono);font-size:.56rem;color:var(--muted);text-align:center;padding:20px;">Awaiting news node dispatch...</div>
+        </div>
+        <div class="panel-corner tl"></div><div class="panel-corner tr"></div><div class="panel-corner bl"></div><div class="panel-corner br"></div>
+      </section>
+    </aside>
+
+    <!-- Viewport Panel (Bottom) -->
+    <section class="panel viewport-panel">
+      <div class="panel-header">
+        <span class="panel-title" id="bottom-streams-tag">Global Focus</span>
+        <div class="viewport-tabs" style="margin-left: 20px; border-bottom: none; padding: 0;">
+          <button class="vp-tab active" id="vp-tab-AMBIENT" onclick="switchTab('AMBIENT')">Ambient</button>
+          <button class="vp-tab" id="vp-tab-NEWS" onclick="switchTab('NEWS')">News</button>
+        </div>
+        <!-- Built-in Command Console -->
+        <div style="margin-left: auto; display: flex; gap: 6px; align-items: center;">
+          <input type="text" id="cmd-input" placeholder="Enter dashboard command..." style="background: rgba(0,0,0,0.5); border: 1px solid rgba(0,229,255,0.2); border-radius: 4px; padding: 3px 8px; color: #fff; font-family: var(--mono); font-size: 0.52rem; width: 220px; outline: none;">
+          <button onclick="sendCustomCommand()" class="send-btn" style="background: rgba(0,229,255,0.1); border: 1px solid var(--accent); color: var(--accent); font-family: var(--mono); font-size: 0.52rem; padding: 3px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: all 0.2s;">Send</button>
+        </div>
+      </div>
+      
+      <div class="viewport-content" style="padding: 10px 14px;">
+        <div class="video-hub-grid">
+          <!-- Top Left -->
+          <div class="video-hub-card">
+            <iframe id="stream-1" class="video-hub-iframe" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+            <div class="video-hub-footer">
+              <span class="video-hub-label" id="stream-1-label">Feed A</span>
+              <span class="video-hub-genre">Video Hub</span>
+            </div>
+          </div>
+          <!-- Top Right -->
+          <div class="video-hub-card">
+            <iframe id="stream-2" class="video-hub-iframe" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+            <div class="video-hub-footer">
+              <span class="video-hub-label" id="stream-2-label">Feed B</span>
+              <span class="video-hub-genre">Video Hub</span>
+            </div>
+          </div>
+          <!-- Bottom Left -->
+          <div class="video-hub-card">
+            <iframe id="stream-3" class="video-hub-iframe" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+            <div class="video-hub-footer">
+              <span class="video-hub-label" id="stream-3-label">Feed C</span>
+              <span class="video-hub-genre">Video Hub</span>
+            </div>
+          </div>
+          <!-- Bottom Right -->
+          <div class="video-hub-card">
+            <iframe id="stream-4" class="video-hub-iframe" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+            <div class="video-hub-footer">
+              <span class="video-hub-label" id="stream-4-label">Feed D</span>
+              <span class="video-hub-genre">Video Hub</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="panel-corner tl"></div><div class="panel-corner tr"></div><div class="panel-corner bl"></div><div class="panel-corner br"></div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast">Command Sent</div>
+
+  <!-- External JavaScript Logic -->
+  <script src="/public/dashboard.js"></script>
+</body>
+</html>

@@ -41,6 +41,19 @@ class AriaWakeSentinel:
             logger.warning("[AriaWakeSentinel] Wake sentinel loop not started because model is missing.")
             return
 
+        # Set thread priority to HIGHEST on Windows to prevent CPU starvation
+        try:
+            import win32api
+            import win32process
+            # THREAD_SET_INFORMATION = 0x0020, THREAD_PRIORITY_HIGHEST = 2
+            tid = win32api.GetCurrentThreadId()
+            handle = win32api.OpenThread(0x0020, False, tid)
+            win32process.SetThreadPriority(handle, 2)
+            win32api.CloseHandle(handle)
+            print("[AriaWakeSentinel] Sentinel thread set to HIGHEST priority successfully.")
+        except Exception as priority_err:
+            print(f"[AriaWakeSentinel] Failed to set thread priority: {priority_err}")
+
         self.audio_handler = pyaudio.PyAudio()
         try:
             self.stream = self.audio_handler.open(
@@ -59,10 +72,34 @@ class AriaWakeSentinel:
         try:
             while not self.stop_event.is_set():
                 # State coordination check:
-                # If system is busy (speaking, thinking, transcribing, listening), skip processing
+                # If system is busy (speaking, thinking, transcribing, listening), skip processing and ensure stream is closed
                 if self.system_state_provider and self.system_state_provider():
+                    if self.stream:
+                        print("[AriaWakeSentinel] System is busy. Suspending sentinel stream...")
+                        try:
+                            self.stream.stop_stream()
+                            self.stream.close()
+                        except Exception:
+                            pass
+                        self.stream = None
                     time.sleep(0.1)
                     continue
+
+                # If system is not busy, make sure stream is open
+                if self.stream is None:
+                    print("[AriaWakeSentinel] System is idle. Activating sentinel stream...")
+                    try:
+                        self.stream = self.audio_handler.open(
+                            format=self.FORMAT,
+                            channels=self.CHANNELS,
+                            rate=self.RATE,
+                            input=True,
+                            frames_per_buffer=self.CHUNK_SIZE
+                        )
+                    except Exception as e:
+                        print(f"[AriaWakeSentinel] Could not reopen audio stream: {e}")
+                        time.sleep(1.0)
+                        continue
 
                 try:
                     raw_pcm = self.stream.read(self.CHUNK_SIZE, exception_on_overflow=False)
@@ -82,10 +119,10 @@ class AriaWakeSentinel:
                                 break
                     score = score or 0.0
 
-                    if score >= 0.60:
+                    if score >= 0.80:
                         # Cooldown check
                         now = time.time()
-                        if now - self.last_wake_time > 3.0:
+                        if now - self.last_wake_time > 4.0:
                             print(f"[AriaWakeSentinel] Wake word detected! Score: {score:.2f}")
                             self.last_wake_time = now
                             self.model.reset()  # Clear internal sliding windows

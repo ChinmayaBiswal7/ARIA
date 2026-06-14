@@ -87,11 +87,24 @@ class LifeLearner:
             self._stop.wait(self.SCAN_INTERVAL)
 
     def _scan_all(self):
+        if self.aria:
+            is_voice_active = False
+            if getattr(self.aria, 'voice', None):
+                if self.aria.voice.is_speaking or getattr(self.aria.voice, "vad_detecting_speech", False) or getattr(self.aria.voice, "recording_active", False):
+                    is_voice_active = True
+            if hasattr(self.aria, 'conversation_session') and self.aria.conversation_session.is_active():
+                is_voice_active = True
+                
+            if is_voice_active:
+                print("[LifeLearner] Skipping scanning pass because voice/conversation session is active.")
+                return
+
         print("[LifeLearner] Starting autonomous scanning pass...")
         self._scan_git_repos()
         self._scan_window_patterns()
         self._scan_conversation_patterns()
         print("[LifeLearner] Scanning pass finished.")
+
 
     # ── Git Repo Scanner ─────────────────────────────
 

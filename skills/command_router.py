@@ -24,7 +24,7 @@ def handle_system(aria, inp, user_input, image=None):
         aria._security_admin_helper(inp)
         return {"handled": True, "action": "system", "response": "security_admin_command"}
 
-    if any(x in inp for x in WEATHER_WORDS) or inp.startswith("github "):
+    if inp.startswith("github "):
         aria._weather_github_helper(inp, user_input)
         return {"handled": True, "action": "system", "response": "weather_github_command"}
 

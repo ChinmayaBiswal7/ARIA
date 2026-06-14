@@ -44,7 +44,7 @@ RESET_MEMORY_WORDS = ["reset memory", "forget everything", "clear history", "new
 UI_SWITCH_TO_WORDS = ["switch to", "focus on", "bring up", "go to app"]
 
 BROWSER_TAB_NEW_WORDS = ["new tab"]
-BROWSER_NEWS_WORDS = ["latest news", "news of the world", "world news", "what's going on around the world", "what is going on around the world"]
+BROWSER_NEWS_WORDS = []
 BROWSER_TAB_CLOSE_WORDS = ["close tab", "close the tab", "bar tab", "delete tab", "remove tab"]
 BROWSER_WINDOW_CLOSE_WORDS = ["close window", "close the window", "close chrome", "close browser", "close cross", "cross button", "press cross"]
 BROWSER_REFRESH_WORDS = ["refresh page", "reload page", "refresh browser"]

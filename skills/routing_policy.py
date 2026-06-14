@@ -48,19 +48,46 @@ EXPLICIT_SEARCH_PREFIXES = [
 ]
 
 LIVE_INFO_CUES = [
+    # Multi-word cues (precise)
     "cricket result",
+    "cricket score",
+    "cricket match",
     "ipl score",
+    "ipl match",
     "live score",
+    "live cricket",
+    "match score",
     "match stats",
     "match result",
     "latest news",
     "current news",
     "weather today",
     "today's weather",
+    "today weather",
     "stock price",
     "share price",
     "crypto price",
     "current price",
+    "news today",
+    "today's news",
+    "news update",
+    # Single-word high-signal tokens (sports / finance / live info / news)
+    # These are words that almost always imply live data is needed.
+    # We keep them here rather than hardcoding in calling code so
+    # the routing policy stays in one place.
+    "scorecard",
+    "wickets",
+    "centuries",
+    "stumps",
+    "news",
+    "headlines",
+    "headline",
+    "weather",
+    "stocks",
+    "stock",
+    "score",
+    "cricket",
+    "match",
 ]
 
 ACTIONABLE_EXECUTION_CUES = [
@@ -213,7 +240,7 @@ def evaluate_tool_arming(
         return ToolArmingDecision(False, "not_a_tool_intent", confidence, tool_threshold(intent))
 
     threshold = tool_threshold(intent)
-    if intent in TOOL_INTENTS and looks_like_information_question(user_input):
+    if intent in TOOL_INTENTS and looks_like_information_question(user_input) and not has_live_info_cue(user_input):
         return ToolArmingDecision(False, "informational_query", confidence, threshold, intent)
 
     if confidence < threshold:

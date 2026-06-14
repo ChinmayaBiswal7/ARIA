@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, onSnapshot, setDoc, collection, addDoc } from "firebase/firestore";
+import { getFirestore, doc, onSnapshot, setDoc, getDoc, collection, addDoc, arrayUnion } from "firebase/firestore";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
 import SphereCanvas from "./components/SphereCanvas";
@@ -22,12 +22,14 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
+const isAndroid = typeof window !== "undefined" && !!window.AndroidInterface;
+
 export default function App() {
-  const [showSplash, setShowSplash] = useState(true);
+  const [showSplash, setShowSplash] = useState(!isAndroid);
   const [status, setStatus] = useState("OFFLINE");
   const [pcStatus, setPcStatus] = useState("OFFLINE");
-  const [lastResponse, setLastResponse] = useState("Tap the sphere above to connect to ARIA");
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [lastResponse, setLastResponse] = useState(isAndroid ? "Ready for commands in console below" : "Tap the sphere above to connect to ARIA");
+  const [isInitialized, setIsInitialized] = useState(isAndroid);
   const [toast, setToast] = useState({ show: false, message: "" });
   const [connectionDotClass, setConnectionDotClass] = useState("status-dot offline");
   const [screenshot, setScreenshot] = useState(null);
@@ -66,6 +68,14 @@ export default function App() {
   const [screenQuality, setScreenQuality] = useState("medium");
   const lastScreenshotTimestampRef = useRef(0);
 
+  // WebRTC States and Refs
+  const [useLiveStream, setUseLiveStream] = useState(false);
+  const [webrtcStatus, setWebrtcStatus] = useState("DISCONNECTED");
+  const [webrtcStats, setWebrtcStats] = useState(null);
+  const peerConnectionRef = useRef(null);
+  const videoRef = useRef(null);
+  const webrtcUnsubscribeRef = useRef(null);
+
   useEffect(() => {
     const handleBeforeInstall = (e) => {
       e.preventDefault();
@@ -75,6 +85,19 @@ export default function App() {
     };
     window.addEventListener("beforeinstallprompt", handleBeforeInstall);
     return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+  }, []);
+
+  useEffect(() => {
+    if (isAndroid) {
+      console.log("[Remote] Running in Android App mode. Fast-booting native UI...");
+      if (window.AndroidInterface && typeof window.AndroidInterface.onSplashCompleted === "function") {
+        try {
+          window.AndroidInterface.onSplashCompleted();
+        } catch (e) {
+          console.error("Failed to notify Android splash completed:", e);
+        }
+      }
+    }
   }, []);
 
   const handleInstallClick = async () => {
@@ -143,6 +166,341 @@ export default function App() {
     }, 1000);
     
     return () => clearInterval(interval);
+  }, []);
+
+  // Periodically send active ping to Firestore commands/latest to keep live streaming alive
+  useEffect(() => {
+    let lastPing = 0;
+    const sendPing = async () => {
+      if (document.hidden) return;
+      
+      const now = Date.now();
+      // Rate-limit pings to once every 5 seconds (to avoid spamming on rapid interaction clicks)
+      if (now - lastPing < 5000) return;
+      lastPing = now;
+
+      try {
+        const commandId = "ping_" + now;
+        await setDoc(doc(db, "commands", "latest"), {
+          id: commandId,
+          source: "phone",
+          text: "[PING]",
+          timestamp: now
+        });
+      } catch (e) {
+        console.error("Failed to send active ping:", e);
+      }
+    };
+
+    // Send initial ping
+    sendPing();
+
+    const interval = setInterval(sendPing, 10000);
+
+    // Also send ping on user interaction with the page, rate-limited by the 5s check
+    const handleActivity = () => {
+      sendPing();
+    };
+    window.addEventListener("click", handleActivity);
+    window.addEventListener("touchstart", handleActivity);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("click", handleActivity);
+      window.removeEventListener("touchstart", handleActivity);
+    };
+  }, []);
+
+  // ── WebRTC Connection Logic ───────────────────────────────────────────────
+  const sendClientLog = async (msg) => {
+    console.log("[WebRTC/Phone]", msg);
+    try {
+      await setDoc(doc(db, "webrtc_sessions", "latest"), {
+        client_logs: arrayUnion(`${new Date().toISOString().substring(11, 19)}: ${msg}`)
+      }, { merge: true });
+    } catch (e) {
+      console.warn("Failed to upload client log:", e);
+    }
+  };
+
+  const startWebRtcSession = async () => {
+    try {
+      setWebrtcStatus("CONNECTING");
+
+      // Log device capability diagnostics
+      await sendClientLog(`UserAgent: ${navigator.userAgent}`);
+      await sendClientLog(`RTCPeerConnection available: ${typeof window.RTCPeerConnection !== "undefined"}`);
+
+      // TURN relay servers are required for NAT traversal across cellular + campus WiFi.
+      // OpenRelay by Metered: completely free, no API key needed.
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+          {
+            urls: [
+              "turn:openrelay.metered.ca:80",
+              "turn:openrelay.metered.ca:443",
+              "turns:openrelay.metered.ca:443",
+            ],
+            username:   "openrelayproject",
+            credential: "openrelayproject",
+          },
+        ],
+        iceTransportPolicy: "all", // try direct first, fall back to relay
+      });
+      peerConnectionRef.current = pc;
+      await sendClientLog("RTCPeerConnection created successfully");
+
+      // ── Stats poller (only while connected) ──
+      const statsInterval = setInterval(async () => {
+        if (!pc || pc.connectionState !== "connected") return;
+        try {
+          const stats = await pc.getStats();
+          stats.forEach(report => {
+            if (report.type === "inbound-rtp" && report.kind === "video") {
+              const fps    = report.framesPerSecond || 30;
+              const width  = report.frameWidth  || 1920;
+              const height = report.frameHeight || 1080;
+              let rttStr = "N/A";
+              stats.forEach(r => {
+                if ((r.type === "remote-candidate" || r.type === "candidate-pair") &&
+                    r.currentRoundTripTime !== undefined) {
+                  rttStr = Math.round(r.currentRoundTripTime * 1000) + "ms";
+                }
+              });
+              setWebrtcStats({ resolution: `${width}x${height}`, fps: Math.round(fps), latency: rttStr });
+            }
+          });
+        } catch (e) {}
+      }, 2000);
+      pc._statsInterval = statsInterval;
+
+      // ── ontrack: receive desktop video ──
+      pc.ontrack = (event) => {
+        sendClientLog(`ontrack triggered: kind=${event.track.kind}`);
+        console.log("[WebRTC] Remote video track received!", event.track.kind, event.streams);
+        if (videoRef.current) {
+          let stream = event.streams && event.streams[0];
+          if (!stream) {
+            stream = new MediaStream();
+            stream.addTrack(event.track);
+          }
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().then(() => {
+            sendClientLog("videoRef.play() success");
+          }).catch(err => {
+            sendClientLog(`videoRef.play() blocked/failed: ${err.message || err.toString()}`);
+            console.warn("[WebRTC] Auto-play blocked, waiting for user gesture:", err);
+          });
+        }
+      };
+
+      // ── Connection state: ONLY mark CONNECTED here ──
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+        sendClientLog(`Connection state changed: ${state}`);
+        console.log("[WebRTC] Connection state:", state);
+        if (state === "connected") {
+          console.log("[WebRTC] Peer connection CONNECTED. Video should be flowing.");
+          setWebrtcStatus("CONNECTED");
+        } else if (["failed", "closed", "disconnected"].includes(state)) {
+          console.warn("[WebRTC] Connection ended:", state);
+          stopWebRtcSession();
+        }
+      };
+
+      // ── ICE state logging ──
+      pc.oniceconnectionstatechange = () => {
+        sendClientLog(`ICE connection state changed: ${pc.iceConnectionState}`);
+        console.log("[WebRTC] ICE state:", pc.iceConnectionState);
+      };
+      pc.onicegatheringstatechange = () => {
+        sendClientLog(`ICE gathering state changed: ${pc.iceGatheringState}`);
+        console.log("[WebRTC] ICE gathering:", pc.iceGatheringState);
+      };
+
+      const sessionDocRef = doc(db, "webrtc_sessions", "latest");
+      const phoneCandRef  = doc(db, "webrtc_sessions", "latest", "candidates", "phone_candidates");
+      const pcCandRef     = doc(db, "webrtc_sessions", "latest", "candidates", "pc_candidates");
+
+      // ── Collect phone ICE candidates and push to Firestore ──
+      const phoneCandidates = [];
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          const c = event.candidate;
+          sendClientLog(`ICE candidate generated: type=${c.type} address=${c.address || c.candidate} port=${c.port}`);
+          console.log(`[WebRTC] Phone ICE: ${c.type} ${c.address || c.candidate}`);
+          phoneCandidates.push({
+            candidate:     c.candidate,
+            sdpMid:        c.sdpMid,
+            sdpMLineIndex: c.sdpMLineIndex,
+          });
+          // Upload after every new candidate so the PC can apply ASAP
+          setDoc(phoneCandRef, { candidates: phoneCandidates }, { merge: false })
+            .catch(err => console.warn("[WebRTC] Failed to upload phone candidates:", err));
+        } else {
+          sendClientLog("ICE candidate gathering complete (null candidate received)");
+          console.log("[WebRTC] Phone ICE gathering complete. Final upload:", phoneCandidates.length, "candidates");
+          setDoc(phoneCandRef, { candidates: phoneCandidates }, { merge: false })
+            .catch(err => console.warn("[WebRTC] Final candidate upload failed:", err));
+        }
+      };
+
+      // ── Write "requesting" to kick off the PC, and clear old logs ──
+      await setDoc(sessionDocRef, { status: "requesting", timestamp: Date.now(), client_logs: [] });
+      await sendClientLog("Session requested, cleared old logs");
+
+      // ── Listen for Offer from PC ──
+      webrtcUnsubscribeRef.current = onSnapshot(sessionDocRef, async (docSnap) => {
+        if (!docSnap.exists()) return;
+        const data = docSnap.data();
+
+        if (data.status === "offered" && data.offer_sdp && pc.signalingState === "stable") {
+          await sendClientLog("Offer received from PC. Starting handshake...");
+          console.log("[WebRTC] Offer received from PC. Starting handshake...");
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: data.offer_sdp }));
+            await sendClientLog("setRemoteDescription success");
+            console.log("[WebRTC] Remote description set. Creating answer...");
+
+            // Apply PC ICE candidates already in Firestore (in addition to those in the SDP)
+            try {
+              const pcCandSnap = await getDoc(pcCandRef);
+              if (pcCandSnap.exists()) {
+                const pcCands = pcCandSnap.data().candidates || [];
+                await sendClientLog(`Applying ${pcCands.length} extra PC candidates from Firestore.`);
+                console.log(`[WebRTC] Applying ${pcCands.length} extra PC candidates from Firestore.`);
+                for (const c of pcCands) {
+                  try { 
+                    await pc.addIceCandidate(new RTCIceCandidate(c)); 
+                    await sendClientLog(`Extra candidate applied: ${c.candidate}`);
+                  } catch (e) {
+                    await sendClientLog(`Failed to apply candidate: ${e.message || e.toString()}`);
+                  }
+                }
+              }
+            } catch (e) { 
+              await sendClientLog(`Could not fetch PC candidates: ${e.message || e.toString()}`);
+              console.warn("[WebRTC] Could not fetch PC candidates:", e); 
+            }
+
+            await sendClientLog("Creating answer...");
+            const answer = await pc.createAnswer();
+            await sendClientLog("createAnswer success");
+            await pc.setLocalDescription(answer);
+            await sendClientLog("setLocalDescription success");
+            console.log("[WebRTC] Answer created. Waiting for ICE gathering to complete...");
+
+            // Upload Answer only once ICE gathering is complete (all candidates embedded)
+            const uploadAnswer = async () => {
+              await sendClientLog("ICE gathering complete. Uploading answer + final candidates...");
+              console.log("[WebRTC] ICE gathering done. Uploading answer + final candidates...");
+              // Final candidate push before uploading answer
+              await setDoc(phoneCandRef, { candidates: phoneCandidates }, { merge: false }).catch(() => {});
+              await setDoc(sessionDocRef, {
+                status:     "answered",
+                answer_sdp: pc.localDescription.sdp,
+                timestamp:  Date.now(),
+              }, { merge: true });
+              await sendClientLog("Answer uploaded to Firestore");
+              console.log("[WebRTC] Answer uploaded. Waiting for PC to reach CONNECTED...");
+            };
+
+            if (pc.iceGatheringState === "complete") {
+              await uploadAnswer();
+            } else {
+              pc.addEventListener("icegatheringstatechange", async () => {
+                if (pc.iceGatheringState === "complete") await uploadAnswer();
+              }, { once: false });
+            }
+          } catch (err) {
+            await sendClientLog("ERROR: Handshake failed: " + (err.stack || err.message || err.toString()));
+            console.error("[WebRTC] Handshake failed:", err);
+            stopWebRtcSession();
+          }
+        } else if (data.status === "closed") {
+          await sendClientLog("PC closed connection status.");
+          console.log("[WebRTC] PC closed connection.");
+          stopWebRtcSession();
+        }
+      });
+
+    } catch (e) {
+      await sendClientLog("ERROR: startWebRtcSession failed: " + (e.stack || e.message || e.toString()));
+      console.error("[WebRTC] Start error:", e);
+      setWebrtcStatus("FAILED");
+      setUseLiveStream(false);
+    }
+  };
+
+  const stopWebRtcSession = async () => {
+    await sendClientLog("stopWebRtcSession called");
+    setWebrtcStatus("DISCONNECTED");
+    setWebrtcStats(null);
+    setUseLiveStream(false);
+
+    if (webrtcUnsubscribeRef.current) {
+      try {
+        webrtcUnsubscribeRef.current();
+      } catch (e) {}
+      webrtcUnsubscribeRef.current = null;
+    }
+
+    if (peerConnectionRef.current) {
+      const pc = peerConnectionRef.current;
+      if (pc._statsInterval) {
+        clearInterval(pc._statsInterval);
+      }
+      try {
+        pc.close();
+      } catch (e) {}
+      peerConnectionRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    try {
+      await setDoc(doc(db, "webrtc_sessions", "latest"), {
+        status: "closed",
+        timestamp: Date.now()
+      }, { merge: true });
+    } catch (e) {}
+  };
+
+  const toggleLiveStreamMode = () => {
+    if (useLiveStream) {
+      stopWebRtcSession();
+    } else {
+      setUseLiveStream(true);
+      startWebRtcSession();
+    }
+  };
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && useLiveStream) {
+        stopWebRtcSession();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [useLiveStream]);
+
+  useEffect(() => {
+    return () => {
+      if (webrtcUnsubscribeRef.current) webrtcUnsubscribeRef.current();
+      if (peerConnectionRef.current) {
+        if (peerConnectionRef.current._statsInterval) {
+          clearInterval(peerConnectionRef.current._statsInterval);
+        }
+        peerConnectionRef.current.close();
+      }
+    };
   }, []);
 
   // ── Show Toast Helper ─────────────────────────────────────────────────────
@@ -454,6 +812,11 @@ export default function App() {
   };
 
   const handleScreenClick = async (e) => {
+    // If WebRTC is active and currently paused, force play on click interaction
+    if (useLiveStream && videoRef.current && videoRef.current.paused) {
+      videoRef.current.play().catch(err => console.warn("[WebRTC] Play on click gesture failed:", err));
+    }
+
     const container = screenImageContainerRef.current;
     if (!container) return;
     
@@ -688,128 +1051,130 @@ export default function App() {
       )}
 
       
-      {/* Top Bar */}
-      <div className="topbar">
-        <div className="topbar-logo">
-          <div className="logo-text">ARIA</div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          {isInstallable && (
-            <button className="pwa-install-btn" onClick={handleInstallClick}>
-              📲 Install App
-            </button>
-          )}
-          <div className={connectionDotClass} id="conn-dot"></div>
-        </div>
-      </div>
-
-      {/* Hero Panel */}
-      <div className="hero-panel">
-        <div
-          className="sphere-container"
-          onClick={!isInitialized ? toggleMicrophone : undefined}
-          onPointerDown={isInitialized ? startVoiceCapture : undefined}
-          onPointerUp={isInitialized ? stopVoiceCapture : undefined}
-          onPointerLeave={isInitialized ? stopVoiceCapture : undefined}
-          style={{ touchAction: "none", userSelect: "none" }}
-        >
-          <SphereCanvas
-            state={getCanvasState()}
-            audioAnalyser={audioAnalyser}
-            audioDataArray={audioDataArray}
-          />
-          {/* Overlay to unlock browser audio context */}
-          <div className={`activation-overlay ${isInitialized ? "hidden" : ""}`}>
-            <button className="activation-btn">Activate Remote</button>
+      {!isAndroid && (
+        <div className="topbar">
+          <div className="topbar-logo">
+            <div className="logo-text">ARIA</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+            {isInstallable && (
+              <button className="pwa-install-btn" onClick={handleInstallClick}>
+                📲 Install App
+              </button>
+            )}
+            <div className={connectionDotClass} id="conn-dot"></div>
           </div>
         </div>
+      )}
 
-        <div className="hero-info">
+      {!isAndroid && (
+        <div className="hero-panel">
           <div
-            className="hero-status"
-            id="hub-state"
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
-              gap: "8px",
-              textTransform: "uppercase",
-              letterSpacing: "2px",
-              fontSize: "0.72rem",
-              fontWeight: "800"
-            }}
+            className="sphere-container"
+            onClick={!isInitialized ? toggleMicrophone : undefined}
+            onPointerDown={isInitialized ? startVoiceCapture : undefined}
+            onPointerUp={isInitialized ? stopVoiceCapture : undefined}
+            onPointerLeave={isInitialized ? stopVoiceCapture : undefined}
+            style={{ touchAction: "none", userSelect: "none" }}
           >
-            <span style={{
-              color:
-                pcStatus === "THINKING"
-                  ? "rgba(251, 191, 36, 1)"
-                  : pcStatus === "SPEAKING"
-                  ? "rgba(167, 139, 250, 1)"
-                  : pcStatus === "ERROR"
-                  ? "#ef4444"
-                  : "#00e5ff"
-            }}>
-              PC: {pcStatus}
-            </span>
-            <span style={{ color: "rgba(255,255,255,0.15)" }}>|</span>
-            <span style={{
-              color: isMicActive ? "#10b981" : "#64748b",
-              display: "flex",
-              alignItems: "center",
-              gap: "4px"
-            }}>
-              <span style={{ 
-                display: "inline-block", 
-                width: "6px", 
-                height: "6px", 
-                borderRadius: "50%", 
-                background: isMicActive ? "#10b981" : "#64748b",
-                animation: isMicActive ? "blink 1.5s infinite" : "none"
-              }}></span>
-              MIC: {isMicActive ? "ON" : "MUTED"}
-            </span>
-          </div>
-          
-          {/* Debug Telemetry Indicators */}
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              justifyContent: "center",
-              gap: "8px",
-              marginTop: "8px",
-              marginBottom: "8px",
-              fontSize: "0.65rem",
-              fontFamily: "monospace",
-              color: "rgba(255, 255, 255, 0.45)"
-            }}
-          >
-            <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
-              FIREBASE: <span style={{ color: firebaseState === "Connected" ? "#10b981" : firebaseState === "Error" ? "#ef4444" : "#fbbf24" }}>{firebaseState}</span>
-            </span>
-            <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
-              HEARTBEAT: <span style={{ color: heartbeatAge === null ? "#64748b" : heartbeatAge > 9 ? "#ef4444" : "#00e5ff" }}>{heartbeatAge === null ? "N/A" : `${heartbeatAge}s`}</span>
-            </span>
-            <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
-              SCREEN: <span style={{ color: lastScreenshotAge === null ? "#64748b" : lastScreenshotAge > 15 ? "#fbbf24" : "#00e5ff" }}>{lastScreenshotAge === null ? "N/A" : `${lastScreenshotAge}s`}</span>
-            </span>
-            <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
-              MIC: <span style={{ color: micStatus === "Active" ? "#10b981" : micStatus === "Denied" ? "#ef4444" : "#64748b" }}>{micStatus}</span>
-            </span>
+            <SphereCanvas
+              state={getCanvasState()}
+              audioAnalyser={audioAnalyser}
+              audioDataArray={audioDataArray}
+            />
+            {/* Overlay to unlock browser audio context */}
+            <div className={`activation-overlay ${isInitialized ? "hidden" : ""}`}>
+              <button className="activation-btn">Activate Remote</button>
+            </div>
           </div>
 
-          <div className="hero-transcript" id="status-display">
-            {lastResponse}
+          <div className="hero-info">
+            <div
+              className="hero-status"
+              id="hub-state"
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: "8px",
+                textTransform: "uppercase",
+                letterSpacing: "2px",
+                fontSize: "0.72rem",
+                fontWeight: "800"
+              }}
+            >
+              <span style={{
+                color:
+                  pcStatus === "THINKING"
+                    ? "rgba(251, 191, 36, 1)"
+                    : pcStatus === "SPEAKING"
+                    ? "rgba(167, 139, 250, 1)"
+                    : pcStatus === "ERROR"
+                    ? "#ef4444"
+                    : "#00e5ff"
+              }}>
+                PC: {pcStatus}
+              </span>
+              <span style={{ color: "rgba(255,255,255,0.15)" }}>|</span>
+              <span style={{
+                color: isMicActive ? "#10b981" : "#64748b",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px"
+              }}>
+                <span style={{ 
+                  display: "inline-block", 
+                  width: "6px", 
+                  height: "6px", 
+                  borderRadius: "50%", 
+                  background: isMicActive ? "#10b981" : "#64748b",
+                  animation: isMicActive ? "blink 1.5s infinite" : "none"
+                }}></span>
+                MIC: {isMicActive ? "ON" : "MUTED"}
+              </span>
+            </div>
+            
+            {/* Debug Telemetry Indicators */}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "center",
+                gap: "8px",
+                marginTop: "8px",
+                marginBottom: "8px",
+                fontSize: "0.65rem",
+                fontFamily: "monospace",
+                color: "rgba(255, 255, 255, 0.45)"
+              }}
+            >
+              <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
+                FIREBASE: <span style={{ color: firebaseState === "Connected" ? "#10b981" : firebaseState === "Error" ? "#ef4444" : "#fbbf24" }}>{firebaseState}</span>
+              </span>
+              <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
+                HEARTBEAT: <span style={{ color: heartbeatAge === null ? "#64748b" : heartbeatAge > 9 ? "#ef4444" : "#00e5ff" }}>{heartbeatAge === null ? "N/A" : `${heartbeatAge}s`}</span>
+              </span>
+              <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
+                SCREEN: <span style={{ color: lastScreenshotAge === null ? "#64748b" : lastScreenshotAge > 15 ? "#fbbf24" : "#00e5ff" }}>{lastScreenshotAge === null ? "N/A" : `${lastScreenshotAge}s`}</span>
+              </span>
+              <span style={{ padding: "2px 6px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "4px" }}>
+                MIC: <span style={{ color: micStatus === "Active" ? "#10b981" : micStatus === "Denied" ? "#ef4444" : "#64748b" }}>{micStatus}</span>
+              </span>
+            </div>
+
+            <div className="hero-transcript" id="status-display">
+              {lastResponse}
+            </div>
           </div>
+
+          <a href="#controls" className="scroll-indicator">
+            <span>Controls</span>
+            <svg viewBox="0 0 24 24">
+              <path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z" />
+            </svg>
+          </a>
         </div>
-
-        <a href="#controls" className="scroll-indicator">
-          <span>Controls</span>
-          <svg viewBox="0 0 24 24">
-            <path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z" />
-          </svg>
-        </a>
-      </div>
+      )}
 
       {/* Screen Feedback Panel */}
       {screenshot && (
@@ -817,33 +1182,80 @@ export default function App() {
           <div className="screen-feedback-title-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <span className="screen-feedback-title">PC Live Screen</span>
-              <span className="screen-feedback-subtitle">Tap screen to click</span>
+              <span className="screen-feedback-subtitle">
+                {useLiveStream ? `WebRTC: ${webrtcStatus}` : "Tap screen to click"}
+              </span>
             </div>
-            <div style={{ display: "flex", gap: "6px" }}>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setScreenQuality("low"); sendCommand("screenshot quality low"); }}
-                style={{ fontSize: "0.6rem", padding: "3px 8px", background: screenQuality === "low" ? "rgba(0, 229, 255, 0.15)" : "rgba(255,255,255,0.03)", border: screenQuality === "low" ? "1px solid #00e5ff" : "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", color: screenQuality === "low" ? "#00e5ff" : "#64748b", cursor: "pointer", fontWeight: "bold" }}
-              >LOW</button>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setScreenQuality("medium"); sendCommand("screenshot quality medium"); }}
-                style={{ fontSize: "0.6rem", padding: "3px 8px", background: screenQuality === "medium" ? "rgba(0, 229, 255, 0.15)" : "rgba(255,255,255,0.03)", border: screenQuality === "medium" ? "1px solid #00e5ff" : "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", color: screenQuality === "medium" ? "#00e5ff" : "#64748b", cursor: "pointer", fontWeight: "bold" }}
-              >MED</button>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setScreenQuality("high"); sendCommand("screenshot quality high"); }}
-                style={{ fontSize: "0.6rem", padding: "3px 8px", background: screenQuality === "high" ? "rgba(0, 229, 255, 0.15)" : "rgba(255,255,255,0.03)", border: screenQuality === "high" ? "1px solid #00e5ff" : "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", color: screenQuality === "high" ? "#00e5ff" : "#64748b", cursor: "pointer", fontWeight: "bold" }}
-              >HIGH</button>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <button
+                onClick={(e) => { e.stopPropagation(); toggleLiveStreamMode(); }}
+                style={{
+                  fontSize: "0.6rem",
+                  padding: "3px 8px",
+                  background: useLiveStream 
+                    ? (webrtcStatus === "CONNECTED" ? "rgba(16, 185, 129, 0.15)" : "rgba(251, 191, 36, 0.15)") 
+                    : "rgba(255,255,255,0.03)",
+                  border: useLiveStream 
+                    ? (webrtcStatus === "CONNECTED" ? "1px solid #10b981" : "1px solid #fbbf24") 
+                    : "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: "4px",
+                  color: useLiveStream 
+                    ? (webrtcStatus === "CONNECTED" ? "#10b981" : "#fbbf24") 
+                    : "#cbd5e1",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                  transition: "all 0.3s ease"
+                }}
+              >
+                {useLiveStream ? `⚡ LIVE (${webrtcStatus})` : "📷 CONNECT LIVE"}
+              </button>
+
+              {!useLiveStream ? (
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setScreenQuality("low"); sendCommand("screenshot quality low"); }}
+                    style={{ fontSize: "0.6rem", padding: "3px 8px", background: screenQuality === "low" ? "rgba(0, 229, 255, 0.15)" : "rgba(255,255,255,0.03)", border: screenQuality === "low" ? "1px solid #00e5ff" : "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", color: screenQuality === "low" ? "#00e5ff" : "#64748b", cursor: "pointer", fontWeight: "bold" }}
+                  >LOW</button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setScreenQuality("medium"); sendCommand("screenshot quality medium"); }}
+                    style={{ fontSize: "0.6rem", padding: "3px 8px", background: screenQuality === "medium" ? "rgba(0, 229, 255, 0.15)" : "rgba(255,255,255,0.03)", border: screenQuality === "medium" ? "1px solid #00e5ff" : "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", color: screenQuality === "medium" ? "#00e5ff" : "#64748b", cursor: "pointer", fontWeight: "bold" }}
+                  >MED</button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setScreenQuality("high"); sendCommand("screenshot quality high"); }}
+                    style={{ fontSize: "0.6rem", padding: "3px 8px", background: screenQuality === "high" ? "rgba(0, 229, 255, 0.15)" : "rgba(255,255,255,0.03)", border: screenQuality === "high" ? "1px solid #00e5ff" : "1px solid rgba(255,255,255,0.1)", borderRadius: "4px", color: screenQuality === "high" ? "#00e5ff" : "#64748b", cursor: "pointer", fontWeight: "bold" }}
+                  >HIGH</button>
+                </div>
+              ) : (
+                <div style={{ fontSize: "0.58rem", color: "#64748b", fontFamily: "monospace", display: "flex", gap: "8px", alignItems: "center" }}>
+                  <span>RES: <span style={{ color: "#00e5ff" }}>{webrtcStats?.resolution || "1920x1080"}</span></span>
+                  <span>FPS: <span style={{ color: "#00e5ff" }}>{webrtcStats?.fps || "30"}</span></span>
+                  <span>RTT: <span style={{ color: "#10b981" }}>{webrtcStats?.latency || "N/A"}</span></span>
+                </div>
+              )}
             </div>
           </div>
           <div 
             ref={screenImageContainerRef}
             className={`screen-image-container ${isFullscreenActive ? "fullscreen-active" : ""}`} 
           >
-            <img 
-              src={`data:image/jpeg;base64,${screenshot}`} 
-              alt="PC Screen" 
-              className="screen-image"
-              onClick={handleScreenClick}
-            />
+            {useLiveStream ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="screen-image"
+                style={{ width: "100%", height: "auto", display: "block", background: "#000", cursor: "crosshair" }}
+                onClick={handleScreenClick}
+              />
+            ) : (
+              <img 
+                src={`data:image/jpeg;base64,${screenshot}`} 
+                alt="PC Screen" 
+                className="screen-image"
+                onClick={handleScreenClick}
+              />
+            )}
             {/* Floating Fullscreen / Exit Button */}
             <button
               onClick={(e) => {

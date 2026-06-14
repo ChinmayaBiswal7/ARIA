@@ -36,46 +36,88 @@ def set_user(name: str):
 def trigger_wave():
     _bridge.wave_tick.emit()
 
-
-def _gen_sphere(n=110):
-    """Generate n uniformly-distributed unit-sphere points using Fibonacci spiral."""
+def _gen_sphere(n=2000):
+    """Generate n uniformly-distributed unit-sphere points using Fibonacci spiral (matches mobile)."""
     pts = []
+    golden_ratio = (1.0 + 5.0**0.5) / 2.0
+    golden_angle = (2.0 - golden_ratio) * (2.0 * math.pi)
     for i in range(n):
-        phi = math.acos(-1 + (2 * i) / n)
-        theta = math.sqrt(n * math.pi) * phi
-        x = math.sin(phi) * math.cos(theta)
-        y = math.sin(phi) * math.sin(theta)
-        z = math.cos(phi)
+        z = 1.0 - (i / (n - 1.0)) * 2.0
+        radius_at_z = math.sqrt(max(0.0, 1.0 - z * z))
+        theta = i * golden_angle
+        x = math.cos(theta) * radius_at_z
+        y = math.sin(theta) * radius_at_z
         pts.append([x, y, z])
     return pts
 
-def _rot_y(pts, a):
-    c, s = math.cos(a), math.sin(a)
-    return [[p[0]*c + p[2]*s,  p[1], -p[0]*s + p[2]*c] for p in pts]
-
-def _rot_x(pts, a):
-    c, s = math.cos(a), math.sin(a)
-    return [[p[0], p[1]*c - p[2]*s, p[1]*s + p[2]*c] for p in pts]
-
-
 # ─── State color palettes ─────────────────────────────────────────────────────
 PALETTES = {
-    "IDLE":      {"core": (60, 100, 180),  "glow": (30,  60, 140),  "line": (40, 80, 160)},
-    "LISTENING": {"core": (0,  220, 255),  "glow": (0,  160, 200),  "line": (0, 180, 220)},
-    "THINKING":  {"core": (255, 170,  0),  "glow": (200, 120,  0),  "line": (220, 150, 0)},
-    "SPEAKING":  {"core": (160,  50, 255), "glow": (110,  20, 200), "line": (140, 40, 230)},
-    "ERROR":     {"core": (255,  60,  60), "glow": (180,  20,  20), "line": (220, 40, 40)},
+    "IDLE":      {"core": (0, 140, 255),   "glow": (0, 85, 204),     "line": (0, 140, 255)},
+    "LISTENING": {"core": (0, 229, 255),   "glow": (0, 153, 255),    "line": (0, 229, 255)},
+    "THINKING":  {"core": (139, 92, 246),  "glow": (59, 7, 100),     "line": (139, 92, 246)},
+    "SPEAKING":  {"core": (16, 185, 129),  "glow": (6, 78, 59),      "line": (16, 185, 129)},
+    "ERROR":     {"core": (255, 60, 60),    "glow": (180, 20, 20),    "line": (255, 60, 60)},
 }
+
+STATE_LAYERS = {
+    "IDLE": {
+        "back":   (0, 31, 102),     # #001F66 (dim navy)
+        "middle": (0, 85, 204),     # #0055CC (royal blue)
+        "front":  (0, 140, 255),    # #008CFF (neon blue)
+    },
+    "LISTENING": {
+        "back":   (0, 34, 170),     # #0022AA (cobalt blue)
+        "middle": (0, 153, 255),    # #0099FF (electric blue)
+        "front":  (0, 229, 255),    # #00E5FF (cyan)
+    },
+    "SPEAKING": {
+        "back":   (6, 78, 59),      # #064E3B (forest green)
+        "middle": (16, 185, 129),   # #10B981 (emerald green)
+        "front":  (245, 158, 11),   # #F59E0B (golden amber highlights)
+    },
+    "THINKING": {
+        "back":   (59, 7, 100),     # #3B0764 (dark purple)
+        "middle": (139, 92, 246),   # #8B5CF6 (violet)
+        "front":  (192, 132, 252),  # #C084FC (light purple)
+    },
+    "ERROR": {
+        "back":   (139, 20, 20),
+        "middle": (220, 40, 40),
+        "front":  (255, 60, 60),
+    }
+}
+
+# ─── Caching systems for high-performance QColor, QBrush, and QPen lookup ──────
+COLOR_CACHE = {}
+BRUSH_CACHE = {}
+PEN_CACHE = {}
+
+def get_color(r, g, b, a):
+    key = (r, g, b, a)
+    if key not in COLOR_CACHE:
+        COLOR_CACHE[key] = QColor(r, g, b, a)
+    return COLOR_CACHE[key]
+
+def get_brush(r, g, b, a):
+    key = (r, g, b, a)
+    if key not in BRUSH_CACHE:
+        BRUSH_CACHE[key] = QBrush(get_color(r, g, b, a))
+    return BRUSH_CACHE[key]
+
+def get_pen(r, g, b, a, width=1.0):
+    key = (r, g, b, a, width)
+    if key not in PEN_CACHE:
+        PEN_CACHE[key] = QPen(get_color(r, g, b, a), width)
+    return PEN_CACHE[key]
 
 
 # ─── Main Sphere Canvas ───────────────────────────────────────────────────────
 class SphereCanvas(QWidget):
     """Renders the animated 3D holographic sphere."""
 
-    ORBIT_RADII  = [0.40, 0.55, 0.72]   # relative to sphere radius
-    CONNECT_DIST = 0.72                  # max distance to draw a connection line
-    N_POINTS     = 110
-    FPS          = 30
+    CONNECT_DIST = 0.45                  # max distance to draw a connection line (matches mobile maxConnectDist = 0.45f)
+    N_POINTS     = 1000                  # 1000 points (optimizes CPU performance on desktop while keeping high density)
+    FPS          = 60
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,27 +128,28 @@ class SphereCanvas(QWidget):
         # Sphere data
         random.seed(42)
         self._base_pts = _gen_sphere(self.N_POINTS)
-        self._pts      = [p[:] for p in self._base_pts]   # current rotated pts
+        self._particle_speeds = [0.3 + random.random() * 1.0 for _ in range(self.N_POINTS)]
+        self._particle_phases = [random.random() * 2.0 * math.pi for _ in range(self.N_POINTS)]
 
         # Animation state
         self._ry    = 0.0    # Y rotation angle
-        self._rx    = 0.12   # X tilt (fixed)
+        self._rx    = 0.35   # X tilt forward (matches mobile rx = 0.35f)
         self._pulse = 1.0    # core pulse scale
-        self._pdx   = 0.008  # pulse delta
         self._time  = 0.0
+        self._real_time = 0.0  # Real time elapsed in seconds for camera float
         self._state = "IDLE"
         self._vol   = 0.0    # sound amplitude
         self._wave  = [random.uniform(0.1, 0.4) for _ in range(24)]  # waveform bars
-
-        # Ring angles for orbit lines
-        self._orbit_angles = [random.uniform(0, 360) for _ in self.ORBIT_RADII]
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(1000 // self.FPS)
 
     def set_state(self, state):
-        self._state = state if state in PALETTES else "IDLE"
+        if state == "OFFLINE":
+            self._state = "ERROR"
+        else:
+            self._state = state if state in PALETTES else "IDLE"
         self.update()
 
     def push_wave(self):
@@ -119,37 +162,31 @@ class SphereCanvas(QWidget):
                 "SPEAKING": 0.020, "ERROR": 0.025}.get(self._state, 0.005)
 
     def _tick(self):
-        self._time += 0.033
-        
+        dt = 1.0 / self.FPS
+        self._real_time += dt
+
+        # Determine Y rotation speed based on active state (matches mobile speed values)
+        speed = {
+            "OFFLINE": 0.0004,
+            "LISTENING": 0.012,
+            "THINKING": 0.022,
+            "SPEAKING": 0.016,
+        }.get(self._state, 0.003)
+
+        speed_factor = 60.0 / self.FPS
+        self._time += speed * speed_factor
+        self._ry = (self._ry + speed * speed_factor) % (2.0 * math.pi)
+
         # Real-time simulated sound amplitude based on state
         self._vol = 0.0
         if self._state in ["LISTENING", "SPEAKING"]:
             if self._state == "SPEAKING":
-                self._vol = 0.12 + abs(math.sin(self._time * 7.5)) * 0.28
+                self._vol = 0.12 + abs(math.sin(self._time * 5.5)) * 0.22
             else:  # LISTENING
                 self._vol = 0.03 + abs(math.sin(self._time * 15.0) * math.cos(self._time * 4.0)) * 0.18
 
-        speed = self._speed()
-        self._ry += speed
-
-        # Rotate points
-        pts = _rot_y(self._base_pts, self._ry)
-        self._pts = _rot_x(pts, self._rx)
-
-        # Pulse
-        pulse_speed = {"IDLE": 0.006, "LISTENING": 0.014, "THINKING": 0.020,
-                       "SPEAKING": 0.025, "ERROR": 0.030}.get(self._state, 0.010)
-        pulse_range = {"IDLE": (0.96, 1.04), "LISTENING": (0.88, 1.12),
-                       "THINKING": (0.92, 1.08), "SPEAKING": (0.82, 1.18),
-                       "ERROR": (0.85, 1.15)}.get(self._state, (0.96, 1.04))
-        self._pulse += pulse_speed * self._pdx
-        if self._pulse > pulse_range[1] or self._pulse < pulse_range[0]:
-            self._pdx *= -1
-
-        # Orbit ring angles react to volume
-        for i in range(len(self._orbit_angles)):
-            orbit_speed = 0.4 * (i + 1) * (1.0 + self._vol * 3.5)
-            self._orbit_angles[i] = (self._orbit_angles[i] + orbit_speed) % 360
+        # Pulse core breathing envelope (matches mobile: 1.0 + sin(time * 1.8) * 0.04)
+        self._pulse = 1.0 + math.sin(self._time * 1.8) * 0.04
 
         # Waveform updates
         if self._state in ["LISTENING", "SPEAKING"]:
@@ -159,7 +196,8 @@ class SphereCanvas(QWidget):
                 for idx in range(24)
             ]
         else:
-            self._wave = [max(0.05, w * 0.92) for w in self._wave]
+            decay = 0.92 ** (30.0 / self.FPS)
+            self._wave = [max(0.05, w * decay) for w in self._wave]
 
         self.update()
 
@@ -175,138 +213,209 @@ class SphereCanvas(QWidget):
 
         cx = self.width()  // 2
         cy = self.height() // 2
-        R  = int(min(cx, cy) * 0.62 * self._pulse)   # sphere display radius
+        # Match mobile drawing radius = width * 0.38f (using full width/height minimum)
+        R  = int(min(self.width(), self.height()) * 0.38 * self._pulse)
 
-        # ── 1. Background ambient glow ──────────────────────────────────────
-        bg_r = int(R * 1.5)
+        # Simulated mouth-flap speaker level to look alive even in room silence (copied from mobile)
+        active_vol = self._vol
+        if self._state == "SPEAKING" and active_vol < 0.05:
+            active_vol = 0.12 + abs(math.sin(self._time * 5.5)) * 0.22
+
+        # ── 1. Background ambient glow (using mobile alpha & color values) ──
+        bg_r = int(R * 1.55) # matches mobile glowRadius = radius * 1.55f
         if R <= 0 or bg_r <= 0:
             p.end()
             return
+        
+        glow_alpha = 0.05 if self._state == "ERROR" else (0.10 + active_vol * 0.18)
         grad_bg = QRadialGradient(cx, cy, bg_r)
-        grad_bg.setColorAt(0.0, QColor(gr, gg, gb, int(50 * (1.0 + self._vol))))
-        grad_bg.setColorAt(1.0, QColor(5, 8, 20, 0))
+        grad_bg.setColorAt(0.0, get_color(cr, cg, cb, int(glow_alpha * 255)))
+        grad_bg.setColorAt(1.0, get_color(5, 8, 20, 0))
         p.setBrush(QBrush(grad_bg))
         p.setPen(Qt.NoPen)
         p.drawEllipse(cx - bg_r, cy - bg_r, bg_r * 2, bg_r * 2)
 
-        # ── 2. Segmented Orbit rings (Jarvis HUD markings) ──────────────────
-        for idx, frac in enumerate(self.ORBIT_RADII):
-            r_orb = int(R * (1.2 + frac * 0.45))
-            angle = self._orbit_angles[idx]
-            
-            # Base thin dashboard orbit line
-            pen_bg = QPen(QColor(lr, lg, lb, 20), 1.0)
-            p.setPen(pen_bg)
-            p.setBrush(Qt.NoBrush)
-            p.drawEllipse(cx - r_orb, cy - r_orb, r_orb * 2, r_orb * 2)
-            
-            # Rotating thick indicators
-            pen_seg = QPen(QColor(cr, cg, cb, 180), 2.5)
-            p.setPen(pen_seg)
-            for a in [0, 120, 240]:
-                start_angle = int((angle + a - 6) * 16)
-                span_angle = int(12 * 16)
-                p.drawArc(cx - r_orb, cy - r_orb, r_orb * 2, r_orb * 2, start_angle, span_angle)
-
-        # ── 3. Radial Equalizer sweep spikes (VFX hologram wave) ───────────
-        if self._state in ["LISTENING", "SPEAKING"]:
-            spike_count = 30
+        # ── 2. Radial Equalizer sweep spikes (VFX hologram wave, matches mobile) ──
+        if (self._state in ["LISTENING", "SPEAKING"]) and active_vol > 0.05:
+            spike_count = 36
             angle_step = (2.0 * math.pi) / spike_count
-            p.setPen(QPen(QColor(lr, lg, lb, 95), 1.0))
+            spike_alpha = int((0.2 + active_vol * 0.45) * 255)
+            p.setPen(get_pen(cr, cg, cb, spike_alpha, 2.0))
             
             for i in range(spike_count):
-                angle = i * angle_step + self._time * 0.5
-                wave_amp = self._wave[i % len(self._wave)]
+                angle = i * angle_step + self._time * 0.35
+                wave_amp = active_vol * (0.4 + 0.6 * math.sin(self._time * 8.5 + i))
                 
                 start_r = R * 0.95
-                end_r = R * (0.95 + wave_amp * 0.6)
+                end_r = R * (0.95 + wave_amp * 0.55)
                 
                 sx = int(cx + math.cos(angle) * start_r)
-                sy = int(cy + math.sin(angle) * start_r * 0.8) # elliptical projection
+                sy = int(cy + math.sin(angle) * start_r)
                 ex = int(cx + math.cos(angle) * end_r)
-                ey = int(cy + math.sin(angle) * end_r * 0.8)
+                ey = int(cy + math.sin(angle) * end_r)
                 
                 p.drawLine(sx, sy, ex, ey)
 
-        # ── 4. Project 3D Nodes with sound displacement ────────────────────
+        # ── 3. Simulated organic camera floating drift (for continuous parallax) ──
+        # Computes continuous low-frequency drift to shift front & back layers
+        float_x = math.sin(self._real_time * 1.5) * 6.0
+        float_y = math.cos(self._real_time * 1.2) * 6.0
+
+        # ── 4. Project 3D Nodes using mobile camera equations & layer shifts ──
         projected = []
-        for idx, pt in enumerate(self._pts):
-            disp = 1.0
-            if self._state in ["LISTENING", "SPEAKING"]:
-                phase = (idx * 0.15) + self._time * 18.0
-                ripple = math.sin(phase)
-                disp = 1.0 + (ripple * self._vol * 0.10) + (self._vol * 0.12)
+        
+        cosY = math.cos(self._ry)
+        sinY = math.sin(self._ry)
+        cosX = math.cos(self._rx)
+        sinX = math.sin(self._rx)
+        
+        camDistance = 3.2 # matches mobile camDistance = 3.2f
+
+        for idx, pt in enumerate(self._base_pts):
+            # Rotate Y
+            x1 = pt[0] * cosY + pt[2] * sinY
+            y1 = pt[1]
+            z1 = -pt[0] * sinY + pt[2] * cosY
+
+            # Rotate X
+            x2 = x1
+            y2 = y1 * cosX - z1 * sinX
+            z2 = y1 * sinX + z1 * cosX
+
+            displacement = 1.0
+            if self._state == "THINKING":
+                # Vortex effect: spiral around Z-axis and pull inward
+                vortex_angle = self._time * 2.8 + z2 * 4.5
+                c = math.cos(vortex_angle)
+                s = math.sin(vortex_angle)
+                rxNew = x2 * c - y2 * s
+                ryNew = x2 * s + y2 * c
+                x2 = rxNew
+                y2 = ryNew
+                displacement = 0.68 + 0.32 * abs(math.sin(self._time * 1.5 + self._particle_phases[idx]))
+            elif self._state in ["LISTENING", "SPEAKING"]:
+                # Audio spike ripple
+                ripple = math.sin(self._time * 18.0 * self._particle_speeds[idx] + self._particle_phases[idx])
+                displacement = 1.0 + (ripple * active_vol * 0.12) + (active_vol * 0.20)
             else:
-                disp = 1.0 + math.sin(self._time * 2.0 + idx * 0.1) * 0.02
+                # Gentle idle drift
+                displacement = 1.0 + math.sin(self._time * 2.2 * self._particle_speeds[idx] + self._particle_phases[idx]) * 0.02
 
-            px_ = int(cx + pt[0] * R * disp)
-            py_ = int(cy - pt[1] * R * disp)
-            z_  = pt[2]             # -1 (back) ... +1 (front)
-            projected.append((px_, py_, z_))
+            # Camera perspective scaling
+            scaleFactor = camDistance / (camDistance + z2 * 0.6)
 
-        # ── 5. Draw connection lines (Foreground only - performance optimized)
-        for i in range(0, len(self._pts), 3):
-            if self._pts[i][2] < -0.25:
-                continue
-            for j in range(i + 1, len(self._pts), 4):
-                if self._pts[j][2] < -0.25:
-                    continue
-                dist = math.sqrt(sum((self._pts[i][k] - self._pts[j][k])**2 for k in range(3)))
-                if dist < self.CONNECT_DIST:
-                    z_avg = (self._pts[i][2] + self._pts[j][2]) / 2
-                    alpha = int(max(0, min(65, (z_avg + 1) * 30 + 10)))
-                    line_col = QColor(lr, lg, lb, alpha)
-                    p.setPen(QPen(line_col, 0.7))
-                    p.drawLine(projected[i][0], projected[i][1],
-                               projected[j][0], projected[j][1])
+            # Continuous parallax layer translation
+            shiftX = float_x * z2
+            shiftY = float_y * z2
 
-        # ── 6. Draw sorted nodes (back to front) ───────────────────────────
+            px_ = int(cx + x2 * R * displacement * scaleFactor + shiftX)
+            py_ = int(cy - y2 * R * displacement * scaleFactor + shiftY)
+            
+            projected.append((px_, py_, z2, scaleFactor))
+
+        # ── 5. Draw connection lines (Both hemispheres with depth fade, matching mobile) ────
+        connect_dist_sq = self.CONNECT_DIST ** 2
+        step_i = 8
+        step_j = 12
+        for i in range(0, len(self._base_pts), step_i):
+            pt_i = self._base_pts[i]
+            proji = projected[i]
+            for j in range(i + 1, len(self._base_pts), step_j):
+                pt_j = self._base_pts[j]
+                dx = pt_i[0] - pt_j[0]
+                dy = pt_i[1] - pt_j[1]
+                dz = pt_i[2] - pt_j[2]
+                dist_sq = dx*dx + dy*dy + dz*dz
+                if dist_sq < connect_dist_sq:
+                    projj = projected[j]
+                    z_avg = (proji[2] + projj[2]) / 2.0
+                    depth_fade = 0.15 + 0.85 * ((z_avg + 1.0) / 2.0)
+                    alpha = 0.15 * depth_fade * (1.0 + active_vol * 1.5)
+                    if self._state == "ERROR":
+                        alpha *= 0.1
+                    alpha_val = max(0.01, min(0.5, alpha))
+                    alpha_int = int(alpha_val * 255)
+                    p.setPen(get_pen(cr, cg, cb, alpha_int, 1.0))
+                    p.drawLine(proji[0], proji[1], projj[0], projj[1])
+
+        # ── 6. Draw sorted nodes (back to front) with nested core glow ─────
         sorted_indices = sorted(range(len(projected)), key=lambda idx: projected[idx][2])
+        core_drawn = False
+
         for idx in sorted_indices:
-            px_, py_, z_ = projected[idx]
-            brightness = (z_ + 1) / 2        # 0..1
-            size_factor = 1.0 + self._vol * 1.2
-            size = max(1.5, 4.5 * brightness * size_factor)
-            alpha_ = int(80 + 175 * brightness)
-            col = QColor(
-                int(lr + (cr - lr) * brightness),
-                int(lg + (cg - lg) * brightness),
-                int(lb + (cb - lb) * brightness),
-                alpha_
-            )
-            p.setBrush(QBrush(col))
+            px_, py_, z2, scaleFactor = projected[idx]
+
+            # Draw core glow at the exact z = 0 boundary
+            if not core_drawn and z2 >= 0.0:
+                core_r = int(R * 0.24) # matches mobile coreRadius = radius * 0.24f
+                core_glow = int(core_r * (1.1 + active_vol * 2.0))
+                if core_glow > 0:
+                    grad = QRadialGradient(cx, cy, core_glow)
+                    core_alpha = 0.3 if self._state == "ERROR" else 0.85
+                    grad.setColorAt(0.0, get_color(cr, cg, cb, int(core_alpha * 255)))
+                    grad.setColorAt(0.4, get_color(cr, cg, cb, int(core_alpha * 60)))
+                    grad.setColorAt(1.0, get_color(5, 8, 20, 0))
+                    p.setBrush(QBrush(grad))
+                    p.setPen(Qt.NoPen)
+                    p.drawEllipse(cx - core_glow, cy - core_glow, core_glow * 2, core_glow * 2)
+                core_drawn = True
+
+            # Determine dynamic depth layer
+            if z2 < -0.3:
+                layer = "back"
+                base_size = 1.8
+                base_alpha = 0.20
+            elif z2 < 0.3:
+                layer = "middle"
+                base_size = 3.2
+                base_alpha = 0.55
+            else:
+                layer = "front"
+                base_size = 5.2
+                base_alpha = 0.85
+
+            brightness = (z2 + 1.0) / 2.0
+            size = base_size * brightness * (1.0 + active_vol * 0.5) * scaleFactor
+            alpha_int = int(base_alpha * (0.25 + 0.75 * brightness) * (0.25 if self._state == "ERROR" else 1.0) * 255)
+
+            # Dynamic layer-wise colors
+            colors = STATE_LAYERS.get(self._state, STATE_LAYERS["IDLE"])
+            layer_col = colors[layer]
+            
+            p.setBrush(get_brush(layer_col[0], layer_col[1], layer_col[2], alpha_int))
             p.setPen(Qt.NoPen)
-            p.drawEllipse(int(px_ - size / 2), int(py_ - size / 2), int(size), int(size))
+            p.drawEllipse(int(px_ - size / 2.0), int(py_ - size / 2.0), int(max(1.0, size)), int(max(1.0, size)))
 
-        # ── 7. Central Morphing Core glow ──────────────────────────────────
-        core_r = int(R * 0.22)
-        core_glow = int(core_r * (1.25 + self._vol * 2.0))
-        grad = QRadialGradient(cx, cy, core_glow)
-        grad.setColorAt(0.0, QColor(cr, cg, cb, 210))
-        grad.setColorAt(0.3, QColor(cr, cg, cb, 80))
-        grad.setColorAt(1.0, QColor(gr, gg, gb, 0))
-        p.setBrush(QBrush(grad))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(cx - core_glow, cy - core_glow, core_glow * 2, core_glow * 2)
+        # Fallback to make sure core is drawn
+        if not core_drawn:
+            core_r = int(R * 0.24)
+            core_glow = int(core_r * (1.1 + active_vol * 2.0))
+            if core_glow > 0:
+                grad = QRadialGradient(cx, cy, core_glow)
+                core_alpha = 0.3 if self._state == "ERROR" else 0.85
+                grad.setColorAt(0.0, get_color(cr, cg, cb, int(core_alpha * 255)))
+                grad.setColorAt(0.4, get_color(cr, cg, cb, int(core_alpha * 60)))
+                grad.setColorAt(1.0, get_color(5, 8, 20, 0))
+                p.setBrush(QBrush(grad))
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(cx - core_glow, cy - core_glow, core_glow * 2, core_glow * 2)
 
-        # ── 8. Bottom Visualizer wave bars ─────────────────────────────────
+        # ── 7. Bottom Visualizer wave bars ─────────────────────────────────
         bar_count = len(self._wave)
         bar_w     = 6
         bar_gap   = 3
         total_w   = bar_count * (bar_w + bar_gap)
         bx_start  = cx - total_w // 2
-        by_base   = cy + R + 14
+        by_base   = cy + int(min(cx, cy) * 0.62 * self._pulse) + 14
         max_bar_h = 28
 
         for i, amp in enumerate(self._wave):
             bh    = max(3, int(amp * max_bar_h))
             bx    = bx_start + i * (bar_w + bar_gap)
             alpha = int(80 + 140 * amp)
-            bar_c = QColor(cr, cg, cb, alpha)
-            p.setBrush(QBrush(bar_c))
+            p.setBrush(get_brush(cr, cg, cb, alpha))
             p.setPen(Qt.NoPen)
             p.drawRoundedRect(bx, by_base - bh, bar_w, bh * 2, 2, 2)
-
         p.end()
 
 
@@ -423,6 +532,8 @@ class ARIAWindow(QWidget):
         _bridge.wave_tick.connect(self._sphere.push_wave)
 
     def _on_state(self, s):
+        if s == "OFFLINE":
+            s = "ERROR"
         self._sphere.set_state(s)
         self._status_lbl.setText(s)
 

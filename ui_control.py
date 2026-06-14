@@ -351,6 +351,8 @@ from skills.context_skill import WindowEvent
 def _crawl_window_tree(window_title: str) -> dict:
     """Crawl UIA elements using pywinauto."""
     tree = {"buttons": [], "active_tabs": [], "input_fields": []}
+    if not PYWINAUTO:
+        return tree
     try:
         from pywinauto import Desktop
         desktop = Desktop(backend="uia")

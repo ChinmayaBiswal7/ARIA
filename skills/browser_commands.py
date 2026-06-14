@@ -21,10 +21,7 @@ def handle_direct_ui_control(aria, inp, user_input):
         aria.ui.browser_new_tab()
         aria._speak("Opened a new tab.")
         return "opened_new_tab"
-    if any(x in inp for x in ["latest news", "news of the world", "world news", "what's going on around the world", "what is going on around the world"]):
-        aria._speak("Opening the latest news for you.")
-        aria.automation.search_web(user_input.strip() or "latest world news")
-        return "opened_latest_news"
+
     if any(x in inp for x in ["close tab", "close the tab", "bar tab", "delete tab", "remove tab"]):
         aria.ui.browser_close_tab()
         aria._speak("Closed the tab.")

@@ -123,24 +123,29 @@ class Brain:
             
         self._sync_registry_status()
 
-        # Initialize the Vertex AI Unified Bridge
-        try:
-            from skills.vertex_bridge import AriaVertexBridge
-            self.vertex_bridge = AriaVertexBridge()
-            print("[Brain] Vertex AI Unified Bridge initialized successfully.")
-        except Exception as e:
-            self.vertex_bridge = None
-            print(f"[Brain] Could not initialize Vertex AI Unified Bridge: {e}")
+        # Initialize the Vertex AI Unified Bridge (in background thread)
+        def _init_vertex_bg():
+            try:
+                from skills.vertex_bridge import AriaVertexBridge
+                self.vertex_bridge = AriaVertexBridge()
+                print("[Brain] Vertex AI Unified Bridge initialized successfully.")
+            except Exception as e:
+                self.vertex_bridge = None
+                print(f"[Brain] Could not initialize Vertex AI Unified Bridge: {e}")
+        import threading
+        threading.Thread(target=_init_vertex_bg, daemon=True).start()
 
-        # Phase 4B: Start git commit watcher (daemon, non-blocking)
-        try:
-            from skills.git_monitor import GitMonitor
-            gm = GitMonitor()
-            gm.sync_commits_to_timeline()          # Initial sync on startup
-            gm.start_background_watcher(interval_seconds=300)  # Then poll every 5 min
-            print("[Brain] Git commit monitor started (5-min interval).")
-        except Exception as gm_err:
-            print(f"[Brain] Git monitor init failed (non-critical): {gm_err}")
+        # Phase 4B: Start git commit watcher (daemon, non-blocking background thread)
+        def _init_git_monitor_bg():
+            try:
+                from skills.git_monitor import GitMonitor
+                gm = GitMonitor()
+                gm.sync_commits_to_timeline()          # Initial sync on startup
+                gm.start_background_watcher(interval_seconds=300)  # Then poll every 5 min
+                print("[Brain] Git commit monitor started (5-min interval).")
+            except Exception as gm_err:
+                print(f"[Brain] Git monitor init failed (non-critical): {gm_err}")
+        threading.Thread(target=_init_git_monitor_bg, daemon=True).start()
 
 
 
@@ -273,11 +278,18 @@ class Brain:
             if _time.time() < until:
                 continue
                 
+            # Determine max_tokens dynamically: if prompt asks for JSON/widget or is long, allow more tokens
+            max_tokens = 120
+            if isinstance(user_input, str):
+                low_inp = user_input.lower()
+                if any(k in low_inp for k in ["widget", "json", "schema", "payload", "result", "articles", "stocks", "forecast"]):
+                    max_tokens = 1500
+
             payload = {
                 "model": model_name,
                 "messages": messages,
                 "temperature": 0.4,
-                "max_tokens": 120
+                "max_tokens": max_tokens
             }
             
             try:
@@ -319,11 +331,18 @@ class Brain:
             messages.append({"role": msg["role"], "content": msg["content"]})
         messages.append({"role": "user", "content": full_message})
         
+        # Determine max_tokens dynamically: if prompt asks for JSON/widget or is long, allow more tokens
+        max_tokens = 120
+        if isinstance(user_input, str):
+            low_inp = user_input.lower()
+            if any(k in low_inp for k in ["widget", "json", "schema", "payload", "result", "articles", "stocks", "forecast"]):
+                max_tokens = 1500
+
         payload = {
             "model": model_name,
             "messages": messages,
             "temperature": 0.4,
-            "max_tokens": 120
+            "max_tokens": max_tokens
         }
         
         response = requests.post(url, headers=headers, json=payload, timeout=8)
@@ -407,7 +426,13 @@ class Brain:
             if encoded_images:
                 current_turn["images"] = encoded_images
             messages.append(current_turn)
-            opts = {"num_predict": 80, "temperature": 0.4}
+            # Determine num_predict dynamically: if prompt asks for JSON/widget or is long, allow more tokens
+            num_predict = 80
+            if isinstance(user_input, str):
+                low_inp = user_input.lower()
+                if any(k in low_inp for k in ["widget", "json", "schema", "payload", "result", "articles", "stocks", "forecast"]):
+                    num_predict = 1500
+            opts = {"num_predict": num_predict, "temperature": 0.4}
 
         print(f"[Brain/Ollama] Starting local fallback (streaming) using model '{model_to_use}'...")
         
@@ -477,22 +502,26 @@ class Brain:
         if not _OLLAMA_LIB:
             print("[Brain] ollama library not installed. Run: pip install ollama")
             return
-        try:
-            result = _ollama.list()
-            model_names = [m.model for m in result.models]
-            print(f"[Brain] Ollama models found: {model_names}")
-            # Match loosely — Ollama stores as 'modelname:latest' or 'modelname:tag'
-            if any(OLLAMA_MODEL.split(":")[0] in n for n in model_names):
-                self.ollama_ready = True
-            else:
-                print(f"[Brain] '{OLLAMA_MODEL}' not found. Run: ollama pull {OLLAMA_MODEL}")
-            if any(VISION_MODEL.split(":")[0] in n for n in model_names):
-                self.vision_ready = True
-                print(f"[Brain] Vision model '{VISION_MODEL}' found and ready!")
-            else:
-                print(f"[Brain] '{VISION_MODEL}' not found. Run: ollama pull {VISION_MODEL}")
-        except Exception as e:
-            print(f"[Brain] Cannot reach Ollama server: {e}")
+        def _scan_models():
+            try:
+                result = _ollama.list()
+                model_names = [m.model for m in result.models]
+                print(f"[Brain] Ollama models found: {model_names}")
+                # Match loosely — Ollama stores as 'modelname:latest' or 'modelname:tag'
+                if any(OLLAMA_MODEL.split(":")[0] in n for n in model_names):
+                    self.ollama_ready = True
+                else:
+                    print(f"[Brain] '{OLLAMA_MODEL}' not found. Run: ollama pull {OLLAMA_MODEL}")
+                if any(VISION_MODEL.split(":")[0] in n for n in model_names):
+                    self.vision_ready = True
+                    print(f"[Brain] Vision model '{VISION_MODEL}' found and ready!")
+                else:
+                    print(f"[Brain] '{VISION_MODEL}' not found. Run: ollama pull {VISION_MODEL}")
+                self._sync_registry_status()
+            except Exception as e:
+                print(f"[Brain] Cannot reach Ollama server: {e}")
+        import threading
+        threading.Thread(target=_scan_models, daemon=True).start()
 
     def _get_sqlite_context(self, user_name=None, current_task=None, query=None):
         import sqlite3
@@ -2287,6 +2316,88 @@ To open VS Code project:    [VSCODE_OPEN: path]
 
     def _offline_think(self, user_input, user_name=None, routing_decision=None):
         """Rule-based command parser — works with zero dependencies."""
+        # Detect if this is a structured system prompt rather than a raw chat query
+        is_prompt = len(user_input) > 200 or "return only a valid json" in user_input.lower() or "widget_payload" in user_input.lower()
+        if is_prompt:
+            # 1. Extract raw query if possible
+            raw_query = ""
+            if "asked/searched: '" in user_input.lower():
+                try:
+                    parts = user_input.split("asked/searched: '", 1)
+                    raw_query = parts[1].split("'\n", 1)[0].strip()
+                except Exception:
+                    pass
+            if not raw_query:
+                raw_query = "latest news" # default fallback
+            
+            rq_lower = raw_query.lower()
+            
+            # 2. Determine widget type and construct fallback JSON structure
+            import json
+            voice_summary = "All online AI model routes failed or hit rate limits. Falling back to local offline mode."
+            widget_type = "NEWS_WIDGET"
+            payload = {}
+            
+            if any(x in rq_lower for x in ["weather", "temp", "rain", "forecast"]):
+                widget_type = "WEATHER_WIDGET"
+                payload = {
+                    "location": "Local",
+                    "temp": "N/A",
+                    "feels_like": "N/A",
+                    "humidity": "N/A",
+                    "wind_speed": "N/A",
+                    "desc": "Offline Weather Fallback",
+                    "forecast": []
+                }
+                voice_summary = "Weather details are currently unavailable offline."
+            elif any(x in rq_lower for x in ["sport", "cricket", "score", "match", "football", "soccer", "ipl", "standing"]):
+                widget_type = "SPORTS_WIDGET"
+                payload = {
+                    "sport_type": "other",
+                    "match_title": "Offline Fallback Active",
+                    "status": "finished",
+                    "score_string": "No Data",
+                    "venue": "N/A",
+                    "competition": "Offline Mode",
+                    "team_a": { "name": "Team A", "score": "0" },
+                    "team_b": { "name": "Team B", "score": "0" }
+                }
+                voice_summary = "Live sports data is currently unavailable offline."
+            else:
+                # Default to NEWS_WIDGET
+                widget_type = "NEWS_WIDGET"
+                payload = {
+                    "articles": [
+                        {
+                            "headline": "ARIA Offline Fallback Activated",
+                            "summary": "Online AI models hit quota/rate limits. Serving local system status.",
+                            "source": "System Monitor",
+                            "url": "http://127.0.0.1:8000/public/dashboard.html",
+                            "category": "Tech",
+                            "sentiment": "neutral"
+                        },
+                        {
+                            "headline": "Live News Streams Available",
+                            "summary": "DW, Sky News, and WION are active on the dashboard map viewports.",
+                            "source": "Command Center",
+                            "url": "http://127.0.0.1:8000/public/dashboard.html",
+                            "category": "World",
+                            "sentiment": "positive"
+                        }
+                    ]
+                }
+                voice_summary = "Online model routes failed. Displaying active live feeds on the dashboard."
+
+            fallback_obj = {
+                "voice_summary": voice_summary,
+                "widget_payload": {
+                    "view_type": widget_type,
+                    "payload": payload
+                }
+            }
+            # Return wrapped in JSON markdown code block as expected by parser
+            return f"```json\n{json.dumps(fallback_obj, indent=2)}\n```"
+
         inp = user_input.lower().strip()
         now = datetime.datetime.now()
 
